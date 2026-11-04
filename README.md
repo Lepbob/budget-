@@ -1,0 +1,46 @@
+# Budget hebdo (PWA)
+
+Suivi des dépenses et budget semaine par semaine. S'installe sur l'écran d'accueil, fonctionne hors ligne, et synchronise vos données entre appareils dans **votre propre dépôt GitHub privé**, avec un token. Aucun autre serveur.
+
+## Mise en route en 3 étapes
+
+### 1. Héberger l'appli (HTTPS obligatoire pour une PWA)
+L'appli ne contient aucun secret : elle peut être publique.
+- Créez un dépôt GitHub (ex. `budget-app`), envoyez-y le contenu de ce dossier (`index.html`, `app.js`, `style.css`, `sw.js`, `manifest.webmanifest`, `icons/`).
+- Dépôt → Settings → Pages → Source : « Deploy from a branch », branche `main`, dossier `/ (root)`.
+- Votre adresse sera `https://VOTRE-PSEUDO.github.io/budget-app/`.
+- Alternative : glisser le dossier sur Netlify Drop ou Cloudflare Pages.
+
+### 2. Préparer le stockage des données
+- Créez un **second dépôt, privé**, vide (ex. `budget-data`). Ne le rendez jamais public : il contiendra vos dépenses.
+- GitHub → Settings → Developer settings → Fine-grained tokens → *Generate new token*.
+  - Repository access : **Only select repositories** → `budget-data` uniquement.
+  - Permissions → Repository → **Contents : Read and write**.
+  - Choisissez une durée (max. 1 an) et notez la date de renouvellement.
+
+### 3. Connecter chaque appareil
+Ouvrez l'appli, collez `pseudo/budget-data` et le token, puis « Tester et connecter ». Refaites-le sur chaque appareil.
+- Android / Chrome : menu ⋮ → « Installer l'application ».
+- iPhone / Safari : Partager → « Sur l'écran d'accueil ».
+
+## Comment la synchro fonctionne
+- Toutes les données tiennent dans un fichier `budget-hebdo.json` du dépôt de données.
+- L'appli garde une copie locale : elle marche sans réseau, et envoie les changements dès que la connexion revient (au lancement, au retour sur l'appli, 1,5 s après chaque saisie, puis toutes les 90 s).
+- Si deux appareils modifient en même temps, la fusion garde, élément par élément, la version la plus récente. Une suppression est conservée 180 jours pour se propager aux autres appareils.
+- Chaque synchronisation crée un commit dans le dépôt de données : c'est aussi un historique de sauvegarde.
+
+## Limites à connaître
+- **Le token est stocké dans le navigateur** de l'appareil (localStorage). Un token limité à un seul dépôt privé et à la permission Contents limite les dégâts en cas de vol du téléphone. Révoquez-le sur GitHub si besoin, puis reconnectez-vous.
+- Les données ne sont **pas chiffrées** dans le dépôt : gardez-le privé.
+- Le fichier est lu en une fois : prévoyez de l'ordre de 8 000 dépenses avant d'approcher 1 Mo (plusieurs années d'usage). L'appli sait encore le lire au-delà, mais c'est la limite de confort.
+- **Pas de notification programmée** : une PWA sans serveur ne peut pas réveiller le téléphone. Un message de rappel s'affiche dans l'appli après 18 h si rien n'a été saisi.
+- Sauvegarde : Réglages → Exporter (JSON). L'import accepte aussi l'export de la version « page Claude » de l'appli.
+
+## Tester en local
+```bash
+python3 -m http.server 8080
+```
+Puis http://localhost:8080 (`localhost` est accepté comme contexte sécurisé).
+
+## Mettre à jour l'appli
+Après modification des fichiers, changez `VERSION` dans `sw.js` (ex. `budget-v2`) pour forcer le rafraîchissement du cache hors ligne.
