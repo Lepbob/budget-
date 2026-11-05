@@ -34,9 +34,9 @@ const DEF_CATS = [
   { id: 'loisirs', name: 'Loisirs', budget: 0 }, { id: 'maison', name: 'Maison', budget: 0 },
   { id: 'autres', name: 'Autres', budget: 0 }
 ];
-const DEF_S = { t: 's', setupDone: false, income: 0, savings: 0, mode: 'auto', manual: 0, weekStart: 1, carry: true, startDate: '', cats: DEF_CATS };
-let DOCS = {}, S = { ...DEF_S }, EXP = [], REC = [], GOALS = [];
-let LOADING = true, tab = 'week', weekSel = null, pendingRender = false;
+const DEF_S = { t: 's', setupDone: false, income: 0, savings: 0, mode: 'auto', manual: 0, weekStart: 1, monthStart: 5, carry: true, refill: true, smooth: true, startDate: '', cats: DEF_CATS };
+let DOCS = {}, S = { ...DEF_S }, EXP = [], REC = [], GOALS = [], INC = [], REM = [];
+let LOADING = true, tab = 'week', weekSel = null, monthSel = null, pendingRender = false;
 let X = {}; // cache de calcul
 
 /* ---------- Données locales + synchronisation GitHub ---------- */
@@ -54,6 +54,8 @@ function ingest() {
   const all = Object.values(live);
   EXP = all.filter((d) => d.t === 'e');
   REC = all.filter((d) => d.t === 'r');
+  INC = all.filter((d) => d.t === 'i');
+  REM = all.filter((d) => d.t === 'x');
   GOALS = all.filter((d) => d.t === 'g').sort((a, b) => (a.ts || 0) - (b.ts || 0));
   X = {};
 }
@@ -161,8 +163,68 @@ const catColor = (id) => { const i = S.cats.findIndex((c) => c.id === id); retur
 const curWeek = () => weekStartOf(today(), S.weekStart);
 function monthlyEq(r) { const a = r.amount; return { weekly: a * 52 / 12, monthly: a, quarterly: a / 3, yearly: a / 12 }[r.period] || 0; }
 const fixedMonthly = () => REC.reduce((s, r) => s + monthlyEq(r), 0);
-function freeMonthly() { return S.income - S.savings - fixedMonthly(); }
-function baseWeekly() { return S.mode === 'manual' ? S.manual : Math.max(0, Math.round(freeMonthly() * 12 / 52)); }
+
+/* Mois « de paie » : du jour S.monthStart d'un mois à la veille du même jour du mois suivant */
+const pstart = (d) => { const x = parse(d); let m = x.getMonth(); if (x.getDate() < S.monthStart) m--; return ymd(new Date(x.getFullYear(), m, S.monthStart, 12)); };
+const nextP = (ps) => { const x = parse(ps); return ymd(new Date(x.getFullYear(), x.getMonth() + 1, S.monthStart, 12)); };
+const prevP = (ps) => { const x = parse(ps); return ymd(new Date(x.getFullYear(), x.getMonth() - 1, S.monthStart, 12)); };
+const pend = (ps) => addDays(nextP(ps), -1);
+const curP = () => pstart(today());
+const fmtRange = (a, b) => fmtShort(a) + ' → ' + fmtShort(b);
+const MONTHS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+
+/* Dates de prélèvement d'une charge entre a et b (inclus) */
+function occurrences(r, a, b) {
+  const out = [];
+  if (r.period === 'weekly') { for (let d = a; d <= b; d = addDays(d, 1)) if (parse(d).getDay() === (r.dow || 0)) out.push(d); return out; }
+  const da = parse(a), db = parse(b);
+  for (let n = da.getFullYear() * 12 + da.getMonth(); n <= db.getFullYear() * 12 + db.getMonth(); n++) {
+    const y = Math.floor(n / 12), m = n % 12, mm = m + 1, anchor = r.month || 1;
+    if (r.period === 'quarterly' && ((mm - anchor) % 3 + 3) % 3 !== 0) continue;
+    if (r.period === 'yearly' && mm !== anchor) continue;
+    const ds = ymd(new Date(y, m, Math.min(r.day || 1, new Date(y, m + 1, 0).getDate()), 12));
+    if (ds >= a && ds <= b) out.push(ds);
+  }
+  return out;
+}
+function recDateText(r) {
+  switch (r.period) {
+    case 'weekly': return 'chaque ' + DAYS[r.dow || 0].toLowerCase();
+    case 'monthly': return 'le ' + ((r.day || 1) === 1 ? '1er' : (r.day || 1)) + ' de chaque mois';
+    case 'quarterly': { const m = r.month || 1; return 'le ' + (r.day || 1) + ' en ' + [0, 1, 2, 3].map((i) => MONTHS[(m - 1 + 3 * i) % 12]).join(', '); }
+    case 'yearly': return 'le ' + (r.day || 1) + ' ' + MONTHS[(r.month || 1) - 1];
+  }
+  return '';
+}
+const nextDue = (r) => { const t = today(); return occurrences(r, t, addDays(t, 400))[0] || ''; };
+
+function incomeOf(ps) {
+  const end = pend(ps), lines = INC.filter((i) => i.date >= ps && i.date <= end).sort((a, b) => (a.date < b.date ? -1 : 1));
+  if (lines.length) return { total: lines.reduce((s, i) => s + i.amount, 0), lines, fallback: false };
+  return { total: S.income, lines: [], fallback: true };
+}
+function fixedOf(ps) {
+  const end = pend(ps); let t = 0;
+  for (const r of REC) t += r.period === 'monthly' ? r.amount : S.smooth ? monthlyEq(r) : occurrences(r, ps, end).length * r.amount;
+  return Math.round(t);
+}
+function periodInfo(ps) {
+  X.pi = X.pi || {};
+  if (X.pi[ps]) return X.pi[ps];
+  const pe = pend(ps), days = diffDays(nextP(ps), ps), inc = incomeOf(ps), fixed = fixedOf(ps), sav = S.savings;
+  const refill = S.mode === 'auto' && S.refill && ps > pstart(S.startDate || today()) ? periodInfo(prevP(ps)).over : 0;
+  const free = inc.total - fixed - sav;
+  const budget = S.mode === 'manual' ? Math.round(S.manual * days / 7) : free - refill;
+  let spent = 0; const cat = {};
+  for (const e of EXP) if (e.date >= ps && e.date <= pe) { spent += e.amount; cat[e.cat] = (cat[e.cat] || 0) + e.amount; }
+  const eff = Math.max(0, budget);
+  return (X.pi[ps] = { ps, pe, days, inc, fixed, sav, refill, free, budget, spent, cat, left: budget - spent, over: Math.max(0, spent - eff), ratio: eff > 0 ? spent / eff : (spent > 0 ? 2 : 0) });
+}
+function weekBase(w) { // budget d'une semaine = somme des budgets journaliers de ses 7 jours (une semaine peut chevaucher deux mois)
+  X.wb = X.wb || {};
+  if (X.wb[w] == null) { let t = 0; for (let k = 0; k < 7; k++) { const pi = periodInfo(pstart(addDays(w, k))); t += Math.max(0, pi.budget) / pi.days; } X.wb[w] = Math.round(t); }
+  return X.wb[w];
+}
 function weekMap() {
   if (X.wm) return X.wm;
   const m = {}, c = {};
@@ -175,13 +237,13 @@ function carryFor(w) {
   if (!S.carry) return 0;
   const start = weekStartOf(S.startDate || today(), S.weekStart);
   if (w <= start) return 0;
-  const base = baseWeekly(); let c = 0, i = 0;
+  let c = 0, i = 0;
   // Un dépassement se reporte en entier ; un excédent est plafonné à un budget hebdo.
-  for (let k = start; k < w && i < 520; k = addDays(k, 7), i++) c = Math.min(base, c + base - weekSpent(k));
+  for (let k = start; k < w && i < 520; k = addDays(k, 7), i++) { const b = weekBase(k); c = Math.min(b, c + b - weekSpent(k)); }
   return c;
 }
 function weekInfo(w) {
-  const base = baseWeekly(), carry = carryFor(w), avail = base + carry, spent = weekSpent(w);
+  const base = weekBase(w), carry = carryFor(w), avail = base + carry, spent = weekSpent(w);
   const ratio = avail > 0 ? spent / avail : (spent > 0 ? 2 : 0);
   return { base, carry, avail, spent, left: avail - spent, ratio, st: ratio > 1 ? 'bad' : ratio >= 0.8 ? 'warn' : 'ok' };
 }
@@ -211,7 +273,7 @@ function detectSubs() {
     const gaps = []; for (let i = 1; i < l.length; i++) gaps.push(diffDays(l[i].date, l[i - 1].date));
     const gm = median(gaps);
     const period = gm >= 26 && gm <= 35 ? 'monthly' : gm >= 6 && gm <= 8 ? 'weekly' : null;
-    if (period) out.push({ name: l[l.length - 1].note.trim(), amount: Math.round(med), period, count: l.length });
+    if (period) out.push({ name: l[l.length - 1].note.trim(), amount: Math.round(med), period, count: l.length, day: parse(l[l.length - 1].date).getDate(), dow: parse(l[l.length - 1].date).getDay() });
   }
   return out;
 }
@@ -219,25 +281,26 @@ function detectSubs() {
 /* ---------- Rendu ---------- */
 const ICONS = {
   week: '<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/>',
-  stats: '<path d="M5 20V11M12 20V5M19 20v-6"/>',
+  month: '<path d="M5 20V11M12 20V5M19 20v-6"/>',
   fixed: '<path d="M4 12a8 8 0 0 1 14-5l2 2M20 12a8 8 0 0 1-14 5l-2-2M20 4v5h-5M4 20v-5h5"/>',
   save: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5"/>',
   gear: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>'
 };
-const TABS = [['week', 'Semaine'], ['stats', 'Stats'], ['fixed', 'Fixes'], ['save', 'Épargne'], ['gear', 'Réglages']];
+const TABS = [['week', 'Semaine'], ['month', 'Mois'], ['fixed', 'Fixes'], ['save', 'Épargne'], ['gear', 'Réglages']];
 function renderTabs() {
   $('#tabs').innerHTML = TABS.map((t) => '<button class="tab" data-act="tab" data-tab="' + t[0] + '"' + (tab === t[0] ? ' aria-current="page"' : '') + '><svg viewBox="0 0 24 24" aria-hidden="true">' + ICONS[t[0]] + '</svg>' + t[1] + '</button>').join('');
 }
 function render() {
   pendingRender = false;
   if (!weekSel) weekSel = curWeek();
+  if (!monthSel) monthSel = curP();
   renderTabs();
   const v = $('#view');
   if (LOADING) { v.innerHTML = '<div class="skeleton"></div><div class="skeleton" style="height:90px"></div>'; return; }
   const connecting = !cfg && !noSync;
   $('#tabbar').hidden = connecting;
   if (connecting) { v.innerHTML = viewConnect(); $('#fab').hidden = true; return; }
-  v.innerHTML = ({ week: viewWeek, stats: viewStats, fixed: viewFixed, save: viewSave, gear: viewSettings }[tab])();
+  v.innerHTML = ({ week: viewWeek, month: viewMonth, fixed: viewFixed, save: viewSave, gear: viewSettings }[tab])();
   $('#fab').hidden = tab === 'gear';
 }
 function renderSoon() {
@@ -302,82 +365,125 @@ function viewWeek() {
       return h + '<button class="exp" data-act="editExp" data-id="' + esc(e.id) + '"><span class="dot" style="background:' + catColor(e.cat) + '"></span><span class="t"><div>' + esc(e.note || catName(e.cat)) + (e.ctx && e.ctx !== 'prevu' ? '<span class="tag ' + (e.ctx === 'impulsif' ? 'imp' : '') + '">' + ctxName(e.ctx) + '</span>' : '') + '</div>' + (e.note ? '<div class="small muted">' + esc(catName(e.cat)) + '</div>' : '') + '</span><span class="amt num">' + eur(e.amount) + '</span></button>';
     }).join('') + '</section>';
   }
-  const warnFree = S.mode === 'auto' && freeMonthly() < 0 ? '<div class="alert bad">Vos charges fixes et votre épargne dépassent vos revenus. Le budget hebdo automatique est à 0. Vérifiez vos montants dans Réglages et Fixes.</div>' : '';
-  return nav + hero + warnFree + reminder + al + cats + lh;
+  const warnFree = S.mode === 'auto' && periodInfo(pstart(cur ? today() : w)).budget <= 0 ? '<div class="alert bad">Le budget de ce mois est à 0 : revenus, charges fixes, épargne et remboursement de l\'épargne de secours absorbent tout. Vérifiez l\'onglet Mois.</div>' : '';
+  return nav + hero + monthCard(cur ? today() : w) + warnFree + reminder + al + cats + lh;
+}
+function monthCard(ref) {
+  const pi = periodInfo(pstart(ref)), st = pi.ratio > 1 ? 'bad' : pi.ratio >= 0.8 ? 'warn' : 'ok', eff = Math.max(0, pi.budget);
+  return '<button class="card monthcard" data-act="tab" data-tab="month"><div class="row"><h3>Mois · ' + fmtRange(pi.ps, pi.pe) + '</h3><span class="pill ' + st + '">' + (pi.left < 0 ? 'Dépassé' : 'Voir le bilan') + '</span></div>' +
+    '<div class="num" style="margin:8px 0"><strong style="font-size:18px">' + eur(Math.abs(pi.left)) + '</strong> <span class="muted">' + (pi.left < 0 ? 'au-dessus' : 'restants') + ' sur ' + eur(eff) + '</span></div>' +
+    '<div class="gauge" style="height:8px"><b style="width:' + Math.min(100, Math.round(pi.ratio * 100)) + '%;background:var(--' + st + ')"></b></div>' +
+    (pi.over > 0 ? '<div class="small" style="margin-top:10px">À prévoir depuis l\'épargne de secours : <strong class="num">' + eur(pi.over) + '</strong></div>' : '') + '</button>';
 }
 function onboarding() {
-  return '<section class="card stack"><h2>Fixons votre budget</h2><p class="muted">Indiquez vos revenus et ce que vous voulez mettre de côté. L\'appli retire vos charges fixes (onglet Fixes) et divise le reste par semaine.</p>' +
-    '<label class="f">Revenus nets par mois<input id="obIncome" inputmode="decimal" placeholder="2 000"></label>' +
+  return '<section class="card stack"><h2>Fixons votre budget</h2><p class="muted">Indiquez vos revenus habituels et ce que vous voulez mettre de côté. L\'appli retire vos charges fixes (onglet Fixes) et répartit le reste sur les semaines du mois.</p>' +
+    '<label class="f">Revenus nets habituels par mois<input id="obIncome" inputmode="decimal" placeholder="2 000"></label>' +
     '<label class="f">Épargne visée par mois<input id="obSave" inputmode="decimal" placeholder="150"></label>' +
+    '<label class="f">Mon mois commence le (jour de la paie)<input id="obStart" inputmode="numeric" value="5"></label>' +
     '<div class="actions"><button class="btn primary" data-act="obSave">Calculer mon budget</button></div>' +
-    '<p class="small muted">Vous préférez fixer vous-même un montant par semaine ? Vous pourrez le faire dans Réglages.</p></section>';
+    '<p class="small muted">Vos revenus réels, qui varient d\'un mois à l\'autre, se saisissent ensuite dans l\'onglet Mois.</p></section>';
 }
 
-/* --- Stats --- */
+/* --- Mois --- */
 function niceMax(v) { const e = Math.pow(10, Math.floor(Math.log10(v))), m = v / e; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * e; }
 function weeksChart() {
   const cw = curWeek(), n = 8, rows = [];
-  for (let i = n - 1; i >= 0; i--) { const w = addDays(cw, -7 * i); rows.push({ w, s: weekSpent(w) }); }
-  const base = baseWeekly(), max = niceMax(Math.max(base, ...rows.map((r) => r.s), 1000) * 1.05);
+  for (let i = n - 1; i >= 0; i--) { const w = addDays(cw, -7 * i); rows.push({ w, s: weekSpent(w), b: weekBase(w) }); }
+  const max = niceMax(Math.max(...rows.map((r) => r.b), ...rows.map((r) => r.s), 1000) * 1.05);
   const W = 340, H = 180, L = 44, R = 8, T = 10, B = 26, iw = W - L - R, ih = H - T - B, bw = iw / n;
   const y = (v) => T + ih - (v / max) * ih;
   let g = '';
   [0, max / 2, max].forEach((t) => { g += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(t) + '" y2="' + y(t) + '"/><text class="tick" x="' + (L - 6) + '" y="' + (y(t) + 3.5) + '" text-anchor="end">' + Math.round(t / 100) + ' €</text>'; });
   rows.forEach((r, i) => {
-    const x = L + i * bw + bw * 0.18, h = Math.max(0, (r.s / max) * ih), over = base > 0 && r.s > base;
-    g += '<rect class="bar ' + (over ? 'over ' : '') + (i === n - 1 ? 'cur' : 'past') + '" x="' + x.toFixed(1) + '" y="' + (T + ih - h).toFixed(1) + '" width="' + (bw * 0.64).toFixed(1) + '" height="' + h.toFixed(1) + '" rx="3"><title>' + fmtShort(r.w) + ' : ' + eur(r.s) + '</title></rect>';
+    const x = L + i * bw + bw * 0.18, h = Math.max(0, (r.s / max) * ih), over = r.b > 0 && r.s > r.b;
+    g += '<rect class="bar ' + (over ? 'over ' : '') + (i === n - 1 ? 'cur' : 'past') + '" x="' + x.toFixed(1) + '" y="' + (T + ih - h).toFixed(1) + '" width="' + (bw * 0.64).toFixed(1) + '" height="' + h.toFixed(1) + '" rx="3"><title>' + fmtShort(r.w) + ' : ' + eur(r.s) + ' sur ' + eur(r.b) + '</title></rect>';
+    if (r.b > 0) g += '<line class="budget" x1="' + (x - 3).toFixed(1) + '" x2="' + (x + bw * 0.64 + 3).toFixed(1) + '" y1="' + y(r.b).toFixed(1) + '" y2="' + y(r.b).toFixed(1) + '"/>';
     if (i % 2 === (n - 1) % 2) g += '<text class="tick" x="' + (x + bw * 0.32).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle">' + fmtShort(r.w) + '</text>';
   });
-  if (base > 0) g += '<line class="budget" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(base) + '" y2="' + y(base) + '"/>';
   const avg = rows.slice(0, -1).reduce((s, r) => s + r.s, 0) / (n - 1);
   return { svg: '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Dépenses des 8 dernières semaines">' + g + '</svg>', avg };
 }
-function monthData() {
-  const t = today(), d = parse(t), dn = d.getDate();
-  const cs = ymd(new Date(d.getFullYear(), d.getMonth(), 1, 12));
-  const pm = new Date(d.getFullYear(), d.getMonth() - 1, 1, 12), ps = ymd(pm);
-  const pDays = new Date(pm.getFullYear(), pm.getMonth() + 1, 0).getDate();
-  const pe = ymd(new Date(pm.getFullYear(), pm.getMonth(), Math.min(dn, pDays), 12));
+function periodCompare(ps) {
+  const pe = pend(ps), t = today(), upto = t < pe ? t : pe, el = Math.max(0, diffDays(upto, ps));
+  const pp = prevP(ps), cap = pend(pp), pu = addDays(pp, el), pe2 = pu > cap ? cap : pu;
   const sum = (a, b) => { const o = { total: 0, cat: {} }; for (const e of EXP) if (e.date >= a && e.date <= b) { o.total += e.amount; o.cat[e.cat] = (o.cat[e.cat] || 0) + e.amount; } return o; };
-  return { cur: sum(cs, t), prev: sum(ps, pe), name: d.toLocaleDateString('fr-FR', { month: 'long' }), pname: pm.toLocaleDateString('fr-FR', { month: 'long' }), dn };
+  return { cur: sum(ps, upto), prev: sum(pp, pe2), days: el + 1, pp };
 }
-function viewStats() {
-  if (!EXP.length) return '<div class="card empty"><b>Pas encore de statistiques</b>Elles apparaissent dès les premières dépenses saisies.</div>';
-  const ch = weeksChart(), m = monthData();
+const brow = (l, v, cls) => '<div class="brow ' + (cls || '') + '"><span>' + l + '</span><span class="num">' + v + '</span></div>';
+function viewMonth() {
+  const ps = monthSel, pi = periodInfo(ps), cur = ps === curP(), past = ps < curP();
+  const st = pi.ratio > 1 ? 'bad' : pi.ratio >= 0.8 ? 'warn' : 'ok', eff = Math.max(0, pi.budget);
+  let h = '<div class="weeknav"><button class="icon-btn" data-act="mo" data-d="-1" aria-label="Mois précédent"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>' +
+    '<div class="label">' + (cur ? 'Ce mois' : fmtRange(ps, pi.pe)) + '<div class="small muted" style="font-family:var(--font-body);font-weight:500">' + (cur ? fmtRange(ps, pi.pe) : '<button class="link" data-act="moNow">Revenir à ce mois</button>') + '</div></div>' +
+    '<button class="icon-btn" data-act="mo" data-d="1" aria-label="Mois suivant"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>';
+  if (!S.setupDone) return h + onboarding();
+  h += '<section class="card"><div class="sect-title"><h2>Bilan du mois</h2><span class="pill ' + st + '">' + { ok: 'Dans le budget', warn: 'Attention', bad: 'Dépassé' }[st] + '</span></div>' +
+    brow('Revenus' + (pi.inc.fallback ? ' habituels' : ''), eur(pi.inc.total)) +
+    (S.mode === 'auto' ? brow('Charges fixes', '−' + eur(pi.fixed), 'neg') + (pi.sav ? brow('Épargne mensuelle', '−' + eur(pi.sav), 'neg') : '') + (pi.refill > 0 ? brow('Remboursement de l\'épargne de secours (mois précédent)', '−' + eur(pi.refill), 'neg') : '') + brow('Budget du mois', eur(pi.budget), 'total') : brow('Budget fixé à la semaine', eur(pi.budget), 'total')) +
+    '<div class="gauge" style="height:10px;margin:14px 0 10px"><b style="width:' + Math.min(100, Math.round(pi.ratio * 100)) + '%;background:var(--' + st + ')"></b></div>' +
+    brow('Dépensé', eur(pi.spent)) + brow(pi.left < 0 ? 'Dépassement' : 'Reste', eur(Math.abs(pi.left)), 'total') + '</section>';
+  if (pi.over > 0) h += '<div class="alert bad">' + (cur ? 'Budget du mois dépassé de <b>' + eur(pi.over) + '</b>. Prévoyez ce montant depuis l\'épargne de secours' + (S.refill && S.mode === 'auto' ? ' : il sera retenu sur le budget du mois suivant.' : '.') : 'Ce mois a dépassé son budget de <b>' + eur(pi.over) + '</b>, à remettre dans l\'épargne de secours.') + ' <button class="link" data-act="tab" data-tab="save">Voir l\'épargne de secours</button></div>';
+  if (pi.inc.fallback && S.setupDone) h += '<div class="alert info">Aucun revenu saisi pour ce mois : le budget utilise vos revenus habituels (' + eur(S.income) + '). Ajoutez vos revenus réels ci-dessous.</div>';
+  const prevHas = INC.some((i) => i.date >= prevP(ps) && i.date <= pend(prevP(ps)));
+  h += '<section class="card"><div class="sect-title"><h2>Revenus du mois</h2><button class="btn sm primary" data-act="addInc">Ajouter</button></div>' +
+    (pi.inc.lines.length ? pi.inc.lines.map((i) => '<button class="exp" data-act="editInc" data-id="' + esc(i.id) + '"><span class="t"><div>' + esc(i.label || 'Revenu') + '</div><div class="small muted">' + fmtDay(i.date) + '</div></span><span class="amt num">' + eur(i.amount) + '</span></button>').join('') + '<div class="brow total" style="margin-top:6px"><span>Total</span><span class="num">' + eur(pi.inc.total) + '</span></div>'
+      : '<p class="muted small">Salaire, primes, aides… Ajoutez chaque revenu reçu entre le ' + fmtShort(ps) + ' et le ' + fmtShort(pi.pe) + '. Le total remplace vos revenus habituels.</p>') +
+    (!pi.inc.lines.length && prevHas ? '<div class="actions" style="margin-top:12px"><button class="btn" data-act="copyInc">Copier les revenus du mois précédent</button></div>' : '') + '</section>';
+  if (!EXP.length) return h + '<div class="card empty"><b>Pas encore de statistiques</b>Elles apparaissent dès les premières dépenses saisies.</div>';
+  const ch = weeksChart(), m = periodCompare(ps);
   const dl = (a, b) => { const d = a - b; if (!b && !a) return '<span class="muted">—</span>'; return '<span class="delta ' + (d > 0 ? 'up' : 'down') + ' num">' + (d > 0 ? '+' : '−') + eur(Math.abs(d)) + '</span>'; };
   const ids = [...new Set([...Object.keys(m.cur.cat), ...Object.keys(m.prev.cat)])].sort((a, b) => (m.cur.cat[b] || 0) - (m.cur.cat[a] || 0));
-  const tot = m.cur.total || 1;
+  const tot = pi.spent || 1, ck = Object.keys(pi.cat).sort((a, b) => pi.cat[b] - pi.cat[a]);
   const t30 = addDays(today(), -29), trig = {};
   for (const e of EXP) if (e.date >= t30 && e.ctx && e.ctx !== 'prevu') trig[e.ctx] = (trig[e.ctx] || 0) + e.amount;
   const tk = Object.keys(trig).sort((a, b) => trig[b] - trig[a]), tmax = tk.length ? trig[tk[0]] : 1;
-  return '<section class="card"><div class="sect-title"><h2>8 dernières semaines</h2></div>' + ch.svg +
-    '<div class="legend"><span><i style="background:var(--accent)"></i>Dépenses</span><span><i style="background:var(--bad)"></i>Au-dessus du budget</span><span><i style="background:var(--ink);height:2px"></i>Budget hebdo</span></div>' +
+  return h + '<section class="card"><div class="sect-title"><h2>8 dernières semaines</h2></div>' + ch.svg +
+    '<div class="legend"><span><i style="background:var(--accent)"></i>Dépenses</span><span><i style="background:var(--bad)"></i>Au-dessus du budget</span><span><i style="background:var(--ink);height:2px"></i>Budget de la semaine</span></div>' +
     '<p class="small muted" style="margin-top:8px">Moyenne des 7 semaines précédentes : <strong class="num" style="color:var(--ink)">' + eur(ch.avg) + '</strong></p></section>' +
-    '<section class="card"><div class="sect-title"><h2>Ce mois-ci et le mois dernier</h2></div><p class="small muted" style="margin-bottom:10px">Comparaison sur les ' + m.dn + ' premiers jours de chaque mois.</p>' +
-    '<table class="t"><thead><tr><th></th><th style="text-transform:capitalize">' + m.name + '</th><th style="text-transform:capitalize">' + m.pname + '</th><th>Écart</th></tr></thead><tbody>' +
+    '<section class="card"><div class="sect-title"><h2>Comparé au mois précédent</h2></div><p class="small muted" style="margin-bottom:10px">' + (m.days > 1 ? 'Sur les ' + m.days + ' premiers jours de chaque mois.' : 'Sur le premier jour de chaque mois.') + '</p>' +
+    '<table class="t"><thead><tr><th></th><th>' + fmtShort(ps) + '</th><th>' + fmtShort(m.pp) + '</th><th>Écart</th></tr></thead><tbody>' +
     '<tr><td><strong>Total</strong></td><td class="num"><strong>' + eur(m.cur.total) + '</strong></td><td class="num">' + eur(m.prev.total) + '</td><td>' + dl(m.cur.total, m.prev.total) + '</td></tr>' +
     ids.map((id) => '<tr><td>' + esc(catName(id)) + '</td><td class="num">' + eur(m.cur.cat[id] || 0) + '</td><td class="num">' + eur(m.prev.cat[id] || 0) + '</td><td>' + dl(m.cur.cat[id] || 0, m.prev.cat[id] || 0) + '</td></tr>').join('') + '</tbody></table></section>' +
-    '<section class="card"><div class="sect-title"><h2>Répartition du mois</h2></div>' + (ids.filter((id) => m.cur.cat[id]).length ? ids.filter((id) => m.cur.cat[id]).map((id) => '<div class="hbar"><span class="nm">' + esc(catName(id)) + '</span><span class="track"><b style="width:' + Math.max(2, Math.round(m.cur.cat[id] / tot * 100)) + '%;background:' + catColor(id) + '"></b></span><span class="num small">' + pct(m.cur.cat[id] / tot) + '</span></div>').join('') : '<p class="muted">Aucune dépense ce mois-ci.</p>') + '</section>' +
+    '<section class="card"><div class="sect-title"><h2>Répartition du mois</h2></div>' + (ck.length ? ck.map((id) => '<div class="hbar"><span class="nm">' + esc(catName(id)) + '</span><span class="track"><b style="width:' + Math.max(2, Math.round(pi.cat[id] / tot * 100)) + '%;background:' + catColor(id) + '"></b></span><span class="num small">' + pct(pi.cat[id] / tot) + '</span></div>').join('') : '<p class="muted">Aucune dépense ce mois-ci.</p>') + '</section>' +
     '<section class="card"><div class="sect-title"><h2>Achats hors prévu</h2><span class="small muted">30 derniers jours</span></div>' + (tk.length ? tk.map((k) => '<div class="hbar"><span class="nm">' + ctxName(k) + '</span><span class="track"><b style="width:' + Math.max(4, Math.round(trig[k] / tmax * 100)) + '%;background:var(--bad)"></b></span><span class="num small">' + eur(trig[k]) + '</span></div>').join('') + '<p class="small muted" style="margin-top:12px">Votre premier déclencheur est « ' + ctxName(tk[0]).toLowerCase() + ' ». Notez le contexte en saisissant une dépense pour affiner ce tableau.</p>' : '<p class="muted">Aucune donnée. Dans « Plus de détails » à la saisie, choisissez un contexte (impulsif, stress, ennui…) pour repérer vos déclencheurs.</p>') + '</section>';
 }
 
 /* --- Fixes --- */
 function viewFixed() {
-  const list = [...REC].sort((a, b) => monthlyEq(b) - monthlyEq(a));
-  const tm = fixedMonthly(), subs = detectSubs();
+  const tm = fixedMonthly(), subs = detectSubs(), ps = curP(), pe = pend(ps), t = today();
+  const due = []; for (const r of REC) for (const d of occurrences(r, ps, pe)) due.push({ d, r });
+  due.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+  const dueTotal = due.reduce((s, x) => s + x.r.amount, 0);
+  const list = [...REC].sort((a, b) => { const x = nextDue(a), y = nextDue(b); return x < y ? -1 : x > y ? 1 : 0; });
+  const top = [...REC].sort((a, b) => monthlyEq(b) - monthlyEq(a))[0];
   let h = '<section class="card"><div class="row"><div><h3>Total par mois</h3><div class="kpi"><div class="v num">' + eur(tm) + '</div></div></div><div style="text-align:right"><h3>Par an</h3><div class="kpi"><div class="v num">' + eur(tm * 12) + '</div></div></div></div>' +
-    '<p class="small muted" style="margin-top:8px">Ces charges sont déjà retirées de votre budget hebdo : inutile de les saisir comme dépenses.</p></section>';
+    '<p class="small muted" style="margin-top:8px">Ces charges sont déjà retirées de votre budget : inutile de les saisir comme dépenses.' + (S.smooth && REC.some((r) => r.period !== 'monthly') ? ' Les charges non mensuelles sont lissées sur 12 mois (voir Réglages).' : '') + '</p></section>';
+  if (due.length) h += '<section class="card"><div class="sect-title"><h2>Prélèvements du mois</h2><span class="small muted">' + fmtRange(ps, pe) + '</span></div>' +
+    due.map((x) => '<div class="brow ' + (x.d < t ? 'neg' : '') + '"><span><strong class="num" style="display:inline-block;min-width:72px">' + fmtShort(x.d) + '</strong> ' + esc(x.r.name) + (x.d < t ? ' <span class="tag past">Passé</span>' : x.d === t ? ' <span class="tag">Aujourd\'hui</span>' : '') + '</span><span class="num">' + eur(x.r.amount) + '</span></div>').join('') +
+    '<div class="brow total"><span>Total prévu</span><span class="num">' + eur(dueTotal) + '</span></div></section>';
   h += '<section class="card"><div class="sect-title"><h2>Charges et abonnements</h2><button class="btn sm primary" data-act="addRec">Ajouter</button></div>';
-  if (!list.length) h += '<div class="empty"><b>Aucune charge fixe</b>Ajoutez le loyer, l\'assurance, les abonnements. Le budget hebdo s\'ajuste tout seul.</div>';
-  else h += list.map((r, i) => '<button class="exp" data-act="editRec" data-id="' + esc(r.id) + '"><span class="t"><div>' + esc(r.name) + (i < 3 && list.length > 3 ? '<span class="tag">Plus gros poste</span>' : '') + '</div><div class="small muted">' + PERIODS[r.period] + (r.day ? ' · le ' + r.day : '') + ' · ' + eur(monthlyEq(r) * 12) + ' par an</div></span><span class="amt num">' + eur(r.amount) + '</span></button>').join('');
+  if (!list.length) h += '<div class="empty"><b>Aucune charge fixe</b>Ajoutez le loyer, l\'assurance, les abonnements, avec leur date de prélèvement.</div>';
+  else h += list.map((r, i) => { const nd = nextDue(r); return '<button class="exp" data-act="editRec" data-id="' + esc(r.id) + '"><span class="t"><div>' + esc(r.name) + (list.length >= 3 && r === top ? '<span class="tag">Plus gros poste</span>' : '') + '</div><div class="small muted">' + recDateText(r) + (nd ? ' · prochain : ' + fmtShort(nd) : '') + '</div></span><span class="amt num">' + eur(r.amount) + '</span></button>'; }).join('');
   h += '</section>';
-  if (subs.length) h += '<section class="card stack"><div><h2>Abonnements possibles</h2><p class="small muted">Ces dépenses reviennent à intervalle régulier. Ajoutez-les en charge fixe, ou vérifiez s\'ils servent encore.</p></div>' + subs.map((s, i) => '<div class="row"><div><strong>' + esc(s.name) + '</strong><div class="small muted num">' + eur(s.amount) + ' · ' + (s.period === 'monthly' ? 'chaque mois' : 'chaque semaine') + ' · vu ' + s.count + ' fois</div></div><button class="btn sm" data-act="subAdd" data-i="' + i + '">Ajouter</button></div>').join('') + '</section>';
+  if (subs.length) h += '<section class="card stack"><div><h2>Abonnements possibles</h2><p class="small muted">Ces dépenses reviennent à intervalle régulier. Ajoutez-les en charge fixe, ou vérifiez s\'ils servent encore.</p></div>' + subs.map((s, i) => '<div class="row"><div><strong>' + esc(s.name) + '</strong><div class="small muted num">' + eur(s.amount) + ' · ' + (s.period === 'monthly' ? 'chaque mois, vers le ' + s.day : 'chaque ' + DAYS[s.dow].toLowerCase()) + ' · vu ' + s.count + ' fois</div></div><button class="btn sm" data-act="subAdd" data-i="' + i + '">Ajouter</button></div>').join('') + '</section>';
   return h;
 }
 
 /* --- Épargne --- */
 function viewSave() {
-  let h = '<section class="card"><h3>Épargne prévue</h3><div class="kpi"><div class="v num">' + eur(S.savings) + ' <span class="small muted" style="font-family:var(--font-body);font-weight:500">par mois</span></div></div><p class="small muted" style="margin-top:6px">Ce montant est déjà retiré de votre budget hebdo. Modifiez-le dans Réglages.</p></section>';
+  const cur = curP(), first = pstart(S.startDate || today()), closed = [];
+  for (let p = first; p < cur && closed.length < 240; p = nextP(p)) closed.push(periodInfo(p));
+  const totalOver = closed.reduce((s, p) => s + p.over, 0), remis = REM.reduce((s, x) => s + x.amount, 0), due = totalOver - remis, pc = periodInfo(cur);
+  const rems = [...REM].sort((a, b) => (a.date < b.date ? 1 : -1));
+  let h = '<section class="card"><div class="sect-title"><h2>Épargne de secours</h2><button class="btn sm primary" data-act="addRem">Noter une remise</button></div>' +
+    '<p class="small muted" style="margin-bottom:10px">Un dépassement est ce que vous avez dû prendre sur l\'épargne de secours en fin de mois. L\'appli le calcule : dépenses du mois moins budget du mois.' + (S.refill && S.mode === 'auto' ? ' Il est ensuite retenu sur le budget du mois suivant.' : '') + '</p>' +
+    brow('Dépassement du mois en cours' + (pc.over > 0 ? ' (provisoire)' : ''), eur(pc.over)) + brow('Dépassements des mois passés', eur(totalOver)) + brow('Déjà remis', '−' + eur(remis), 'neg') +
+    brow(due < 0 ? 'Remis en avance' : 'Reste à remettre', eur(Math.abs(due)), 'total');
+  const lastOver = closed.filter((p) => p.over > 0).slice(-6).reverse();
+  if (lastOver.length) h += '<h3 style="margin:16px 0 4px">Mois dépassés</h3>' + lastOver.map((p) => brow(fmtRange(p.ps, p.pe), eur(p.over))).join('');
+  if (rems.length) h += '<h3 style="margin:16px 0 4px">Remises notées</h3>' + rems.map((x) => '<button class="exp" data-act="editRem" data-id="' + esc(x.id) + '"><span class="t"><div>' + fmtDay(x.date) + '</div>' + (x.note ? '<div class="small muted">' + esc(x.note) + '</div>' : '') + '</span><span class="amt num">' + eur(x.amount) + '</span></button>').join('');
+  h += '</section>';
+  h += '<section class="card"><h3>Épargne mensuelle prévue</h3><div class="kpi"><div class="v num">' + eur(S.savings) + ' <span class="small muted" style="font-family:var(--font-body);font-weight:500">par mois</span></div></div><p class="small muted" style="margin-top:6px">Ce montant est déjà retiré de votre budget. Modifiez-le dans Réglages.</p></section>';
   h += '<section class="card"><div class="sect-title"><h2>Objectifs</h2><button class="btn sm primary" data-act="addGoal">Nouvel objectif</button></div>';
   if (!GOALS.length) h += '<div class="empty"><b>Aucun objectif</b>Vacances, fonds d\'urgence, projet : ajoutez un montant à atteindre.</div>';
   h += GOALS.map((g) => {
@@ -409,7 +515,7 @@ const viewConnect = () => connectCard(false);
 
 /* --- Réglages --- */
 function viewSettings() {
-  const free = freeMonthly(), base = baseWeekly();
+  const pc = periodInfo(curP());
   const stMsg = { ok: 'À jour', pending: 'Synchronisation en cours…', offline: 'Hors ligne : les changements partiront dès le retour du réseau.', auth: 'GitHub refuse le token (expiré, révoqué ou sans droit d\'écriture). Déconnectez puis reconnectez-vous avec un nouveau token.', error: 'Échec : ' + esc(syncErr), local: '', load: '' }[syncState] || '';
   const sy = cfg
     ? '<section class="card stack"><h2>Synchronisation GitHub</h2><p class="small">Dépôt <strong>' + esc(cfg.repo) + '</strong>, fichier <strong>' + esc(cfg.path) + '</strong></p>' +
@@ -418,14 +524,18 @@ function viewSettings() {
     : connectCard(true);
   return sy +
     '<section class="card stack"><h2>Revenus et épargne</h2>' +
-    '<label class="f">Revenus nets par mois<input data-money="income" inputmode="decimal" value="' + (S.income ? toInput(S.income) : '') + '" placeholder="0"></label>' +
+    '<label class="f">Revenus nets habituels par mois<input data-money="income" inputmode="decimal" value="' + (S.income ? toInput(S.income) : '') + '" placeholder="0"></label>' +
+    '<p class="small muted">Utilisés tant qu\'aucun revenu n\'est saisi pour un mois. Vos revenus réels se saisissent dans l\'onglet Mois.</p>' +
     '<label class="f">Épargne par mois<input data-money="savings" inputmode="decimal" value="' + (S.savings ? toInput(S.savings) : '') + '" placeholder="0"></label>' +
-    '<div class="small muted num">Charges fixes : ' + eur(fixedMonthly()) + ' par mois · Reste : ' + eur(free) + ' par mois</div></section>' +
+    '<div class="small muted num">Mois en cours : revenus ' + eur(pc.inc.total) + ' − charges ' + eur(pc.fixed) + ' − épargne ' + eur(pc.sav) + (pc.refill ? ' − remboursement ' + eur(pc.refill) : '') + ' = <strong style="color:var(--ink)">' + eur(pc.budget) + '</strong></div></section>' +
     '<section class="card stack"><h2>Budget hebdomadaire</h2>' +
     '<label class="f">Calcul<select data-set="mode"><option value="auto"' + (S.mode === 'auto' ? ' selected' : '') + '>Automatique (revenus − charges − épargne)</option><option value="manual"' + (S.mode === 'manual' ? ' selected' : '') + '>Je fixe le montant</option></select></label>' +
     (S.mode === 'manual' ? '<label class="f">Budget par semaine<input data-money="manual" inputmode="decimal" value="' + (S.manual ? toInput(S.manual) : '') + '" placeholder="0"></label>' : '') +
-    '<div class="small muted num">Budget actuel : <strong style="color:var(--ink)">' + eur(base) + '</strong> par semaine</div>' +
+    '<div class="small muted num">Budget actuel : <strong style="color:var(--ink)">' + eur(weekBase(curWeek())) + '</strong> par semaine</div>' +
     '<label class="f">La semaine commence le<select data-set="weekStart">' + [1, 2, 3, 4, 5, 6, 0].map((d) => '<option value="' + d + '"' + (S.weekStart === d ? ' selected' : '') + '>' + DAYS[d] + '</option>').join('') + '</select></label>' +
+    '<label class="f">Le mois commence le<select data-set="monthStart">' + Array.from({ length: 28 }, (_, i) => i + 1).map((d) => '<option value="' + d + '"' + (S.monthStart === d ? ' selected' : '') + '>' + d + '</option>').join('') + '</select></label>' +
+    '<label class="sw"><span><strong>Réserver le remboursement de l\'épargne de secours</strong><div class="small muted">Le dépassement d\'un mois est retenu sur le budget du mois suivant.</div></span><input type="checkbox" data-set="refill"' + (S.refill ? ' checked' : '') + '></label>' +
+    '<label class="sw"><span><strong>Lisser les charges non mensuelles</strong><div class="small muted">Annuelles, trimestrielles, hebdomadaires : réparties sur 12 mois au lieu d\'un seul prélèvement.</div></span><input type="checkbox" data-set="smooth"' + (S.smooth ? ' checked' : '') + '></label>' +
     '<label class="sw"><span><strong>Reporter l\'excédent et le dépassement</strong><div class="small muted">Un dépassement réduit la semaine suivante. Un excédent s\'y ajoute, dans la limite d\'un budget hebdo.</div></span><input type="checkbox" data-set="carry"' + (S.carry ? ' checked' : '') + '></label></section>' +
     '<section class="card"><div class="sect-title"><h2>Catégories</h2></div><p class="small muted" style="margin-bottom:12px">Budget par semaine. Laissez vide pour ne pas fixer de plafond.</p>' +
     S.cats.map((c) => '<div class="setrow"><input data-cname="' + esc(c.id) + '" value="' + esc(c.name) + '" aria-label="Nom de la catégorie"><input data-cbudget="' + esc(c.id) + '" inputmode="decimal" value="' + (c.budget ? toInput(c.budget) : '') + '" placeholder="Sans plafond" aria-label="Budget hebdo"><button class="icon-btn" data-act="delCat" data-id="' + esc(c.id) + '" aria-label="Supprimer ' + esc(c.name) + '"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>').join('') +
@@ -456,13 +566,37 @@ function expenseSheet(e) {
     '<details' + (edit && e.ctx ? ' open' : '') + '><summary>Plus de détails</summary><p class="small muted" style="margin:6px 0 10px">Le contexte aide à repérer les achats impulsifs dans les statistiques.</p><div class="chips" id="fCtx" role="group" aria-label="Contexte">' + CTX.map((c) => '<button type="button" class="chip" data-ctx="' + c[0] + '" aria-pressed="' + (edit && e.ctx === c[0]) + '">' + c[1] + '</button>').join('') + '</div></details>' +
     '<div class="actions"><button type="submit" class="btn primary">Enregistrer</button>' + (edit ? '<button type="button" class="btn danger" data-act="delExp" data-id="' + esc(e.id) + '">Supprimer</button>' : '') + '<button type="button" class="btn" data-act="closeSheet">Annuler</button></div></form>');
 }
+function recFields(per, r) {
+  const d = r && r.day ? r.day : '', m = (r && r.month) || 1, dow = r && r.dow != null ? r.dow : 1;
+  if (per === 'weekly') return '<label class="f">Jour de la semaine<select id="rDow">' + [1, 2, 3, 4, 5, 6, 0].map((i) => '<option value="' + i + '"' + (dow === i ? ' selected' : '') + '>' + DAYS[i] + '</option>').join('') + '</select></label>';
+  const months = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+  return '<div class="grid2 stackable">' + (per === 'monthly' ? '' : '<label class="f">' + (per === 'quarterly' ? 'Premier mois' : 'Mois') + '<select id="rMonth">' + months.map((n, i) => '<option value="' + (i + 1) + '"' + (m === i + 1 ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></label>') +
+    '<label class="f">Jour du mois<input id="rDay" inputmode="numeric" placeholder="Ex. 5" value="' + d + '"></label></div>';
+}
 function recSheet(r) {
+  const per = r ? r.period : 'monthly';
   openSheet('<form id="recForm" class="stack" data-id="' + (r ? esc(r.id) : '') + '" data-ts="' + (r ? r.ts || '' : '') + '" novalidate><h2>' + (r ? 'Modifier la charge' : 'Nouvelle charge fixe') + '</h2>' +
     '<label class="f">Nom<input id="rName" autofocus autocomplete="off" maxlength="60" placeholder="Ex. Loyer, Netflix" value="' + (r ? esc(r.name) : '') + '"></label>' +
     '<div class="grid2 stackable"><label class="f">Montant<input id="rAmt" inputmode="decimal" placeholder="0" value="' + (r ? toInput(r.amount) : '') + '"></label>' +
-    '<label class="f">Fréquence<select id="rPer">' + Object.keys(PERIODS).map((k) => '<option value="' + k + '"' + ((r ? r.period : 'monthly') === k ? ' selected' : '') + '>' + PERIODS[k] + '</option>').join('') + '</select></label></div>' +
-    '<label class="f">Jour de prélèvement (facultatif)<input id="rDay" inputmode="numeric" placeholder="Ex. 5" value="' + (r && r.day ? r.day : '') + '"></label>' +
+    '<label class="f">Fréquence<select id="rPer">' + Object.keys(PERIODS).map((k) => '<option value="' + k + '"' + (per === k ? ' selected' : '') + '>' + PERIODS[k] + '</option>').join('') + '</select></label></div>' +
+    '<div id="rDate" class="stack">' + recFields(per, r) + '</div>' +
+    '<p class="small muted">La date de prélèvement est obligatoire : elle sert à afficher le calendrier du mois.</p>' +
     '<div class="actions"><button type="submit" class="btn primary">Enregistrer</button>' + (r ? '<button type="button" class="btn danger" data-act="delRec" data-id="' + esc(r.id) + '">Supprimer</button>' : '') + '<button type="button" class="btn" data-act="closeSheet">Annuler</button></div></form>');
+}
+function incSheet(i) {
+  const ps = monthSel || curP(), def = today() >= ps && today() <= pend(ps) ? today() : ps;
+  openSheet('<form id="incForm" class="stack" data-id="' + (i ? esc(i.id) : '') + '" novalidate><h2>' + (i ? 'Modifier le revenu' : 'Nouveau revenu') + '</h2>' +
+    '<label class="f">Intitulé<input id="iLabel" autofocus autocomplete="off" maxlength="60" placeholder="Ex. Salaire, prime, CAF" value="' + (i ? esc(i.label || '') : '') + '"></label>' +
+    '<div class="grid2 stackable"><label class="f">Montant<input id="iAmt" inputmode="decimal" placeholder="0" value="' + (i ? toInput(i.amount) : '') + '"></label><label class="f">Date de réception<input type="date" id="iDate" value="' + (i ? i.date : def) + '"></label></div>' +
+    '<p class="small muted">Le revenu compte pour le mois où tombe sa date (mois du ' + S.monthStart + ' au ' + (S.monthStart === 1 ? 'dernier jour' : S.monthStart - 1) + ').</p>' +
+    '<div class="actions"><button type="submit" class="btn primary">Enregistrer</button>' + (i ? '<button type="button" class="btn danger" data-act="delInc" data-id="' + esc(i.id) + '">Supprimer</button>' : '') + '<button type="button" class="btn" data-act="closeSheet">Annuler</button></div></form>');
+}
+function remSheet(x) {
+  const due = x ? '' : '';
+  openSheet('<form id="remForm" class="stack" data-id="' + (x ? esc(x.id) : '') + '" novalidate><h2>' + (x ? 'Modifier la remise' : 'Remise dans l\'épargne de secours') + '</h2>' +
+    '<div class="grid2 stackable"><label class="f">Montant remis<input id="xAmt" autofocus inputmode="decimal" placeholder="0" value="' + (x ? toInput(x.amount) : '') + '"></label><label class="f">Date<input type="date" id="xDate" value="' + (x ? x.date : today()) + '"></label></div>' +
+    '<label class="f">Note (facultatif)<input id="xNote" autocomplete="off" maxlength="80" placeholder="Ex. Virement du 5" value="' + (x ? esc(x.note || '') : '') + '"></label>' +
+    '<div class="actions"><button type="submit" class="btn primary">Enregistrer</button>' + (x ? '<button type="button" class="btn danger" data-act="delRem" data-id="' + esc(x.id) + '">Supprimer</button>' : '') + '<button type="button" class="btn" data-act="closeSheet">Annuler</button></div></form>');
 }
 function goalSheet(g) {
   openSheet('<form id="goalForm" class="stack" data-id="' + (g ? esc(g.id) : '') + '" novalidate><h2>' + (g ? 'Modifier l\'objectif' : 'Nouvel objectif') + '</h2>' +
@@ -503,8 +637,27 @@ document.addEventListener('submit', async (ev) => {
     const name = $('#rName').value.trim(), amount = parseMoney($('#rAmt').value);
     if (!name) { toast('Donnez un nom à cette charge.'); return; }
     if (!(amount > 0)) { toast('Saisissez un montant supérieur à 0.'); return; }
-    const day = parseInt($('#rDay').value, 10), id = f.dataset.id || 'r_' + uid();
-    if (await write(() => store.set(id, { t: 'r', name, amount, period: $('#rPer').value, day: day >= 1 && day <= 31 ? day : 0, ts: f.dataset.ts ? +f.dataset.ts : Date.now() }))) { closeSheet(); toast('Charge enregistrée'); }
+    const per = $('#rPer').value; let day = 0, month = 0, dow = 0;
+    if (per === 'weekly') dow = +$('#rDow').value;
+    else {
+      day = parseInt($('#rDay').value, 10);
+      if (!(day >= 1 && day <= 31)) { toast('Indiquez le jour du prélèvement (de 1 à 31).'); $('#rDay').focus(); return; }
+      if (per !== 'monthly') month = +$('#rMonth').value;
+    }
+    const id = f.dataset.id || 'r_' + uid();
+    if (await write(() => store.set(id, { t: 'r', name, amount, period: per, day, month, dow, ts: f.dataset.ts ? +f.dataset.ts : Date.now() }))) { closeSheet(); toast('Charge enregistrée'); }
+  } else if (f.id === 'incForm') {
+    const amount = parseMoney($('#iAmt').value), date = $('#iDate').value;
+    if (!(amount > 0)) { toast('Saisissez un montant supérieur à 0.'); return; }
+    if (!date) { toast('Choisissez la date de réception.'); return; }
+    const id = f.dataset.id || 'i_' + uid(), old = DOCS[id];
+    if (await write(() => store.set(id, { t: 'i', label: $('#iLabel').value.trim(), amount, date, ts: old ? old.ts : Date.now() }))) { closeSheet(); toast('Revenu enregistré'); }
+  } else if (f.id === 'remForm') {
+    const amount = parseMoney($('#xAmt').value), date = $('#xDate').value;
+    if (!(amount > 0)) { toast('Saisissez un montant supérieur à 0.'); return; }
+    if (!date) { toast('Choisissez une date.'); return; }
+    const id = f.dataset.id || 'x_' + uid();
+    if (await write(() => store.set(id, { t: 'x', amount, date, note: $('#xNote').value.trim(), ts: Date.now() }))) { closeSheet(); toast('Remise enregistrée'); }
   } else if (f.id === 'goalForm') {
     const name = $('#gName').value.trim(), target = parseMoney($('#gTarget').value), start = parseMoney($('#gStart').value);
     if (!name) { toast('Donnez un nom à cet objectif.'); return; }
@@ -533,6 +686,20 @@ document.addEventListener('click', async (ev) => {
       if (el.dataset.armed) { try { localStorage.removeItem(CFG_KEY); localStorage.setItem(NOSYNC_KEY, '1'); } catch (e) {} cfg = null; noSync = true; setSync('local'); render(); toast('Déconnecté. Les données restent sur cet appareil.'); }
       else { el.dataset.armed = '1'; el.textContent = 'Confirmer la déconnexion'; }
       break;
+    case 'mo': monthSel = el.dataset.d === '1' ? nextP(monthSel) : prevP(monthSel); render(); break;
+    case 'moNow': monthSel = curP(); render(); break;
+    case 'addInc': incSheet(); break;
+    case 'editInc': incSheet(DOCS[id]); break;
+    case 'delInc': if (el.dataset.armed) { if (await write(() => store.del(id))) { closeSheet(); toast('Revenu supprimé'); } } else { el.dataset.armed = '1'; el.textContent = 'Confirmer la suppression'; } break;
+    case 'copyInc': {
+      const pp = prevP(monthSel), shift = diffDays(monthSel, pp), end = pend(monthSel);
+      const src = INC.filter((i) => i.date >= pp && i.date <= pend(pp));
+      for (const i of src) { const d = addDays(i.date, shift); await write(() => store.set('i_' + uid(), { t: 'i', label: i.label, amount: i.amount, date: d > end ? end : d, ts: Date.now() })); }
+      toast('Revenus copiés : ajustez les montants si besoin'); break;
+    }
+    case 'addRem': remSheet(); break;
+    case 'editRem': remSheet(DOCS[id]); break;
+    case 'delRem': if (el.dataset.armed) { if (await write(() => store.del(id))) { closeSheet(); toast('Remise supprimée'); } } else { el.dataset.armed = '1'; el.textContent = 'Confirmer la suppression'; } break;
     case 'tab': tab = el.dataset.tab; render(); window.scrollTo(0, 0); break;
     case 'wk': weekSel = addDays(weekSel, +el.dataset.d); render(); break;
     case 'wkNow': weekSel = curWeek(); render(); break;
@@ -543,7 +710,7 @@ document.addEventListener('click', async (ev) => {
     case 'addRec': recSheet(); break;
     case 'editRec': recSheet(DOCS[id]); break;
     case 'delRec': if (el.dataset.armed) { if (await write(() => store.del(id))) { closeSheet(); toast('Charge supprimée'); } } else { el.dataset.armed = '1'; el.textContent = 'Confirmer la suppression'; } break;
-    case 'subAdd': { const s = detectSubs()[+el.dataset.i]; if (s && await write(() => store.set('r_' + uid(), { t: 'r', name: s.name, amount: s.amount, period: s.period, day: 0, ts: Date.now() }))) toast('Ajouté aux charges fixes'); break; }
+    case 'subAdd': { const s = detectSubs()[+el.dataset.i]; if (s && await write(() => store.set('r_' + uid(), { t: 'r', name: s.name, amount: s.amount, period: s.period, day: s.period === 'monthly' ? s.day : 0, month: 0, dow: s.dow, ts: Date.now() }))) toast('Ajouté aux charges fixes'); break; }
     case 'addGoal': goalSheet(); break;
     case 'editGoal': goalSheet(DOCS[id]); break;
     case 'delGoal': if (el.dataset.armed) { if (await write(() => store.del(id))) { closeSheet(); toast('Objectif supprimé'); } } else { el.dataset.armed = '1'; el.textContent = 'Confirmer la suppression'; } break;
@@ -554,9 +721,9 @@ document.addEventListener('click', async (ev) => {
       break;
     }
     case 'obSave': {
-      const inc = parseMoney($('#obIncome').value), sv = parseMoney($('#obSave').value || '0');
+      const inc = parseMoney($('#obIncome').value), sv = parseMoney($('#obSave').value || '0'), ms = Math.min(28, Math.max(1, parseInt($('#obStart').value, 10) || 5));
       if (!(inc > 0)) { toast('Indiquez vos revenus mensuels.'); break; }
-      if (await saveSettings({ setupDone: true, income: inc, savings: isFinite(sv) ? sv : 0, startDate: today() })) { tab = 'fixed'; render(); toast('Ajoutez maintenant vos charges fixes'); }
+      if (await saveSettings({ setupDone: true, income: inc, savings: isFinite(sv) ? sv : 0, monthStart: ms, startDate: today() })) { tab = 'fixed'; render(); toast('Ajoutez maintenant vos charges fixes'); }
       break;
     }
     case 'addCat': await saveSettings({ cats: [...S.cats, { id: 'c' + uid(), name: 'Nouvelle catégorie', budget: 0 }] }); render(); break;
@@ -606,10 +773,11 @@ document.addEventListener('change', async (ev) => {
     } catch (e) { toast('Import impossible : fichier invalide.'); }
     t.value = ''; return;
   }
+  if (t.id === 'rPer') { const old = $('#rDay') ? $('#rDay').value : ''; $('#rDate').innerHTML = recFields(t.value, old ? { day: old } : null); return; }
   if (t.dataset.money) { const v = parseMoney(t.value || '0'); if (isFinite(v) && v >= 0) await saveSettings({ [t.dataset.money]: v }); render(); }
   else if (t.dataset.set) {
     const k = t.dataset.set; let v = t.type === 'checkbox' ? t.checked : t.value;
-    if (k === 'weekStart') { v = +v; await saveSettings({ weekStart: v }); weekSel = null; } else await saveSettings({ [k]: v });
+    if (k === 'weekStart') { v = +v; await saveSettings({ weekStart: v }); weekSel = null; } else if (k === 'monthStart') { v = +v; await saveSettings({ monthStart: v }); monthSel = null; } else await saveSettings({ [k]: v });
     render();
   } else if (t.dataset.cname) { await saveSettings({ cats: S.cats.map((c) => c.id === t.dataset.cname ? { ...c, name: t.value.trim() || c.name } : c) }); render(); }
   else if (t.dataset.cbudget) { const v = t.value.trim() ? parseMoney(t.value) : 0; if (isFinite(v) && v >= 0) await saveSettings({ cats: S.cats.map((c) => c.id === t.dataset.cbudget ? { ...c, budget: v } : c) }); render(); }

@@ -188,3 +188,11 @@ table.t td { padding-block: 8px; border-top: 1px solid var(--line); text-align: 
 ol.steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 ol.steps a, .stack p a { color: var(--accent); font-weight: 600; }
 .hello { padding-top: 8px; }
+
+.brow { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14.5px; }
+.brow:first-of-type { border-top: 0; }
+.brow.neg { color: var(--muted); }
+.brow.total { font-weight: 700; font-size: 16px; border-top: 2px solid var(--ink); }
+button.card.monthcard { display: block; width: 100%; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.tag.past { opacity: .75; }
+.alert .link { font-size: 13.5px; }

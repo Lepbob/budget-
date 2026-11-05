@@ -23,6 +23,12 @@ Ouvrez l'appli, collez `pseudo/budget-data` et le token, puis « Tester et conne
 - Android / Chrome : menu ⋮ → « Installer l'application ».
 - iPhone / Safari : Partager → « Sur l'écran d'accueil ».
 
+## Mois, revenus, charges fixes et épargne de secours
+- **Mois de paie :** le mois va du jour de votre choix (5 par défaut, réglable de 1 à 28) à la veille du même jour du mois suivant. Les semaines qui chevauchent deux mois utilisent le budget journalier de chaque mois.
+- **Revenus variables :** onglet Mois, ajoutez chaque revenu reçu (salaire, prime, aide…) avec sa date. Le total du mois remplace les « revenus habituels » du Réglages tant qu'aucun revenu n'est saisi. Un bouton recopie les revenus du mois précédent.
+- **Charges fixes datées :** la date est obligatoire (jour du mois, jour de la semaine, ou mois et jour pour les charges annuelles et trimestrielles). L'onglet Fixes affiche le calendrier des prélèvements du mois et le prochain prélèvement de chaque charge. Par défaut, les charges non mensuelles sont lissées sur 12 mois dans le budget.
+- **Épargne de secours :** le dépassement d'un mois (dépenses moins budget) est calculé automatiquement. Il est retenu sur le budget du mois suivant (option désactivable), et l'onglet Épargne suit le « reste à remettre » après les remises que vous notez.
+
 ## Comment la synchro fonctionne
 - Toutes les données tiennent dans un fichier `budget-hebdo.json` du dépôt de données.
 - L'appli garde une copie locale : elle marche sans réseau, et envoie les changements dès que la connexion revient (au lancement, au retour sur l'appli, 1,5 s après chaque saisie, puis toutes les 90 s).
