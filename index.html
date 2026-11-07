@@ -6,8 +6,8 @@
 <title>Budget hebdo</title>
 <meta name="description" content="Suivi des dépenses et budget semaine par semaine, synchronisé via GitHub.">
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#EEF1F5" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0E141B" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Budget hebdo">
@@ -15,14 +15,14 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="wrap">
   <header class="top">
     <div class="brand">Budget hebdo</div>
-    <button class="badge" id="sync" data-act="syncNow" type="button"><i></i><span>Chargement…</span></button>
+    <div class="topr"><button class="icon-btn" id="searchBtn" data-act="openSearch" aria-label="Rechercher une dépense" type="button"><svg viewBox="0 0 24 24"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4"/></svg></button><button class="badge" id="sync" data-act="syncNow" type="button"><i></i><span>Chargement…</span></button></div>
   </header>
   <main id="view"><div class="skeleton"></div></main>
 </div>
@@ -31,6 +31,16 @@
 <button class="fab" id="fab" data-act="addExp" aria-label="Ajouter une dépense" type="button"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
 <div class="sheet-wrap" id="sheetWrap" hidden><div class="scrim" data-act="closeSheet"></div><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
 <div class="toast" id="toast" role="status" hidden></div>
+<div class="lockscreen" id="lockScreen" hidden>
+  <form id="lockForm" novalidate>
+    <div class="brand">Budget hebdo</div>
+    <p class="muted">Entrez votre code pour continuer.</p>
+    <input id="lockPin" type="password" inputmode="numeric" autocomplete="off" maxlength="8" aria-label="Code" placeholder="Code">
+    <div id="lockErr" class="small" role="alert"></div>
+    <button class="btn primary" type="submit">Déverrouiller</button>
+    <button class="link small" type="button" id="lockForgot">Code oublié</button>
+  </form>
+</div>
 <noscript>Cette application a besoin de JavaScript.</noscript>
 <script src="app.js"></script>
 </body>
