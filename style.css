@@ -346,3 +346,8 @@ input[type="search"] { -webkit-appearance: none; appearance: none; }
 .badge span { white-space: nowrap; }
 
 textarea { width: 100%; background: var(--bg); border: 2px solid var(--edge); border-radius: 12px; padding: 10px 12px; font: inherit; font-size: 15px; color: var(--ink); resize: vertical; }
+
+/* provisions : lignes grisées (hors budget hebdo) */
+.exp.provx .amt, .exp.provx .t > div:first-child { color: var(--muted); }
+.exp.provx .ibox { opacity: .5; }
+.exp.provx .amt { text-decoration: none; font-weight: 500; }

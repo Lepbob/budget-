@@ -58,9 +58,9 @@ function ingest() {
   REM = all.filter((d) => d.t === 'x');
   FAV = all.filter((d) => d.t === 'f').sort((a, b) => (a.ts || 0) - (b.ts || 0));
   PROV = all.filter((d) => d.t === 'p').sort((a, b) => (a.ts || 0) - (b.ts || 0));
-  EXPB = EXP.filter((e) => !e.prov);
   GOALS = all.filter((d) => d.t === 'g').sort((a, b) => (a.ts || 0) - (b.ts || 0));
   X = {};
+  buildExpb();
 }
 function saveLocal() { try { localStorage.setItem(CACHE_KEY, JSON.stringify(DOCS)); } catch (e) {} }
 function loadLocal() { try { const r = localStorage.getItem(CACHE_KEY); DOCS = r ? JSON.parse(r) || {} : {}; } catch (e) { DOCS = {}; } }
@@ -202,6 +202,27 @@ function recDateText(r) {
 const nextDue = (r) => { const t = today(); return occurrences(r, t, addDays(t, 400))[0] || ''; };
 
 const effP = (i) => { const b = pstart(i.date); return i.shift > 0 ? nextP(b) : i.shift < 0 ? prevP(b) : b; };
+/* ---------- Provisions « du mois » : réserve remise à zéro, l'excédent retombe dans le budget hebdo ---------- */
+function provRes(q, ps) { // montant réservé par une provision du mois pour la période ps
+  if (q.mode !== 'month') return 0;
+  return (q.repeat ? q.from <= ps : q.from === ps) ? q.monthly : 0;
+}
+function buildExpb() {
+  EXPB = []; X.pu = {}; X.px = {};
+  const grp = {};
+  for (const e of EXP) {
+    const q = e.prov ? PROV.find((x) => x.id === e.prov) : null;
+    if (!e.prov || !q) EXPB.push(e);
+    else if (q.mode === 'month') { const k = q.id + '|' + pstart(e.date); (grp[k] = grp[k] || { q, ps: pstart(e.date), l: [] }).l.push(e); }
+  }
+  for (const k in grp) {
+    const g = grp[k]; let rem = provRes(g.q, g.ps), used = 0;
+    g.l.sort((a, b) => (a.date === b.date ? (a.ts || 0) - (b.ts || 0) : a.date < b.date ? -1 : 1));
+    for (const e of g.l) { const u = Math.min(rem, e.amount); rem -= u; used += e.amount; const ex = e.amount - u; if (ex > 0) { X.px[e.id] = ex; EXPB.push({ ...e, amount: ex }); } }
+    X.pu[k] = used;
+  }
+}
+function provUsed(q, ps) { return X.pu[q.id + '|' + ps] || 0; }
 function incomeOf(ps) {
   const lines = INC.filter((i) => effP(i) === ps).sort((a, b) => (a.date < b.date ? -1 : 1));
   if (lines.length) return { total: lines.reduce((t, i) => t + i.amount, 0), lines, fallback: false };
@@ -218,7 +239,9 @@ function periodInfo(ps) {
   const pe = pend(ps), days = diffDays(nextP(ps), ps), inc = incomeOf(ps), fixed = fixedOf(ps), sav = S.savings;
   const refill = S.mode === 'auto' && S.refill && ps > pstart(S.startDate || today()) ? periodInfo(prevP(ps)).over : 0;
   const free = inc.total - fixed - sav;
-  const provM = PROV.filter((q) => q.from <= ps).reduce((t, q) => t + q.monthly, 0);
+  const cur = curP();
+  const provM = PROV.filter((q) => q.mode !== 'month' && q.from <= ps).reduce((t, q) => t + q.monthly, 0) +
+    PROV.reduce((t, q) => { const R = provRes(q, ps); return t + (R ? (ps < cur ? Math.min(R, provUsed(q, ps)) : R) : 0); }, 0);
   const budget = S.mode === 'manual' ? Math.round(S.manual * days / 7) : free - refill - provM;
   let spent = 0; const cat = {};
   for (const e of EXPB) if (e.date >= ps && e.date <= pe) { spent += e.amount; cat[e.cat] = (cat[e.cat] || 0) + e.amount; }
@@ -412,11 +435,11 @@ function viewWeek() {
     lh = '<section class="card">' + list.map((e) => {
       let h = '';
       if (e.date !== last) { last = e.date; const tot = list.filter((x) => x.date === e.date).reduce((s, x) => s + x.amount, 0); h = '<div class="day"><span>' + fmtDay(e.date) + '</span><span class="num">' + eur(tot) + '</span></div>'; }
-      return h + '<div class="swr"><button class="exp" data-act="editExp" data-id="' + esc(e.id) + '">' + catIco(e.cat) + '<span class="t"><div>' + esc(e.note || catName(e.cat)) + (e.prov ? '<span class="tag">Provision</span>' : '') + (e.items && e.items.some((i) => i.s) ? '<span class="tag imp">Superflu ' + eur(e.items.filter((i) => i.s).reduce((t, i) => t + i.a, 0)) + '</span>' : '') + (e.ctx && e.ctx !== 'prevu' ? '<span class="tag ' + (e.ctx === 'impulsif' ? 'imp' : '') + '">' + ctxName(e.ctx) + '</span>' : '') + '</div>' + (e.note ? '<div class="small muted">' + esc(catName(e.cat)) + '</div>' : '') + '</span><span class="amt num">' + eur(e.amount) + '</span></button><div class="swa"><button type="button" class="dup" data-act="dupExp" data-id="' + esc(e.id) + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h10v10H9zM5 15V5h10"/></svg>Dupliquer</button><button type="button" class="del" data-act="swDel" data-id="' + esc(e.id) + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>Supprimer</button></div></div>';
+      return h + '<div class="swr"><button class="exp' + (e.prov && PROV.some((q) => q.id === e.prov) && X.px[e.id] !== e.amount ? ' provx' : '') + '" data-act="editExp" data-id="' + esc(e.id) + '">' + catIco(e.cat) + '<span class="t"><div>' + esc(e.note || catName(e.cat)) + (e.prov ? '<span class="tag">Provision' + (PROV.find((q) => q.id === e.prov) ? ' · ' + esc(PROV.find((q) => q.id === e.prov).name) : '') + '</span>' : '') + (X.px[e.id] ? '<span class="tag imp">' + eur(X.px[e.id]) + ' dans le budget</span>' : '') + (e.items && e.items.some((i) => i.s) ? '<span class="tag imp">Superflu ' + eur(e.items.filter((i) => i.s).reduce((t, i) => t + i.a, 0)) + '</span>' : '') + (e.ctx && e.ctx !== 'prevu' ? '<span class="tag ' + (e.ctx === 'impulsif' ? 'imp' : '') + '">' + ctxName(e.ctx) + '</span>' : '') + '</div>' + (e.note ? '<div class="small muted">' + esc(catName(e.cat)) + '</div>' : '') + '</span><span class="amt num">' + eur(e.amount) + '</span></button><div class="swa"><button type="button" class="dup" data-act="dupExp" data-id="' + esc(e.id) + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h10v10H9zM5 15V5h10"/></svg>Dupliquer</button><button type="button" class="del" data-act="swDel" data-id="' + esc(e.id) + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>Supprimer</button></div></div>';
     }).join('') + '</section>';
   }
   const warnFree = S.mode === 'auto' && periodInfo(pstart(cur ? today() : w)).budget <= 0 ? '<div class="alert bad">Le budget de ce mois est à 0 : revenus, charges fixes, épargne et remboursement de l\'épargne de secours absorbent tout. Vérifiez l\'onglet Mois.</div>' : '';
-  return nav + (cur ? addBtn : '') + hero + stats + quickRow(cur) + monthCard(cur ? today() : w) + warnFree + reminder + al + balAlert(cur) + cats + lh;
+  return nav + (cur ? addBtn : '') + hero + stats + quickRow(cur) + monthCard(cur ? today() : w) + warnFree + reminder + al + balAlert(cur) + provCard() + cats + lh;
 }
 /* ---------- Projection, solde prévisionnel, conseils, provisions ---------- */
 function paceInfo(ps) {
@@ -430,7 +453,7 @@ function paceInfo(ps) {
 function projectBalance() {
   if (S.acctBalance == null || !S.acctDate) return null;
   const t = today(), ps = curP(), pe = pend(ps), pi = periodInfo(ps), el = diffDays(t, ps) + 1;
-  const pace = el >= 5 ? pi.spent / el : Math.max(0, pi.budget) / pi.days, provM = PROV.reduce((a, q) => a + q.monthly, 0);
+  const pace = el >= 5 ? pi.spent / el : Math.max(0, pi.budget) / pi.days, provM = PROV.filter((q) => q.mode !== 'month').reduce((a, q) => a + q.monthly, 0);
   const horizon = pe > t ? pe : t, pts = []; let bal = S.acctBalance;
   for (let d = addDays(S.acctDate, 1), n = 0; d <= horizon && n < 400; d = addDays(d, 1), n++) {
     let delta = 0;
@@ -587,6 +610,15 @@ function curveCard(ps, pi) {
     '<div class="legend"><span>' + fmtShort(ps) + '</span><span>Pointillé : trajectoire du budget</span><span>' + fmtShort(pi.pe) + '</span></div>' +
     '<div class="stline" style="margin-top:10px"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ST_ICON[st] + '"/></svg>' + word + '</div><p class="small" style="margin-top:8px;text-align:center">' + txt + '</p></section>';
 }
+function provMonth(q, ps) { const R = provRes(q, ps), U = provUsed(q, ps); return { R, U, left: R - U }; }
+function provCard() {
+  const ps = curP(), act = PROV.filter((q) => provRes(q, ps) > 0);
+  if (!act.length) return '';
+  return '<section class="card"><div class="sect-title"><h3>Provisions du mois</h3><button class="link" data-act="tab" data-tab="save">Gérer</button></div>' + act.map((q) => {
+    const m = provMonth(q, ps), r = m.R ? m.U / m.R : 0;
+    return '<div class="catrow"><div class="catname"><span>' + esc(q.name) + '</span></div><div class="num small"><strong>' + eur(m.U) + '</strong> <span class="muted">/ ' + eur(m.R) + '</span> · ' + (m.U > m.R ? '<span style="color:var(--bad);font-weight:700">' + eur(m.U - m.R) + ' dans le budget</span>' : '<span class="muted">reste ' + eur(m.left) + '</span>') + '</div><div class="minibar"><b style="width:' + Math.min(100, Math.round(r * 100)) + '%;background:' + (r > 1 ? 'var(--bad)' : 'var(--accent)') + '"></b></div></div>';
+  }).join('') + '</section>';
+}
 function envMonthCard(pi) {
   if (!envSum()) return '';
   const eff = Math.max(0, pi.budget); let allowedTot = 0;
@@ -706,8 +738,8 @@ function viewSave() {
     (due > 0 ? '<p class="small muted">Après remise des ' + eur(due) + ' à remettre : <strong class="num" style="color:var(--ink)">' + eur(S.efBalance + due) + '</strong>.</p>' : '') + '<p class="small muted">Solde saisi le ' + fmtShort(S.efDate) + ' Mettez-le à jour après chaque virement.</p>'; }
   ef += '</section>';
   let pv = '<section class="card"><div class="sect-title"><h2>Provisions</h2><button class="btn sm primary" data-act="addProv">Ajouter</button></div>';
-  if (!PROV.length) pv += '<p class="small muted">Cadeaux, réparations, vacances : mettez un peu de côté chaque mois pour que ces dépenses ne tombent plus par surprise. Le montant mensuel est retiré de votre budget.</p>';
-  pv += PROV.map((q) => { const bl = provBalance(q), pr = q.target ? Math.max(0, Math.min(1, bl / q.target)) : 0; return '<button class="exp" data-act="editProv" data-id="' + esc(q.id) + '" style="flex-wrap:wrap"><span class="t"><div>' + esc(q.name) + '</div><div class="small muted">' + eur(q.monthly) + ' par mois · disponible : <strong class="num" style="color:var(--ink)">' + eur(bl) + '</strong>' + (q.target ? ' sur ' + eur(q.target) : '') + '</div></span><span class="amt num">' + eur(bl) + '</span>' + (q.target ? '<span class="minibar" style="flex-basis:100%"><b style="width:' + Math.round(pr * 100) + '%;background:var(--accent)"></b></span>' : '') + '</button>'; }).join('') + '</section>';
+  if (!PROV.length) pv += '<p class="small muted">Équipement de sport, cadeaux, réparations : réservez un montant pour le mois, il est retiré de votre budget hebdo. Les achats rattachés à la provision n\'y pèsent plus ; ce qui dépasse retombe dans le budget, et ce qui reste y revient en fin de mois.</p>';
+  pv += PROV.map((q) => { if (q.mode === 'month') { const ps = curP(), m = provMonth(q, ps), nx = provRes(q, nextP(ps)) > 0, pr = m.R ? Math.min(1, m.U / m.R) : 0; return '<button class="exp" data-act="editProv" data-id="' + esc(q.id) + '" style="flex-wrap:wrap"><span class="t"><div>' + esc(q.name) + '</div><div class="small muted">' + (m.R ? 'Ce mois : ' + eur(m.U) + ' dépensés sur ' + eur(m.R) + (m.U > m.R ? ' · ' + eur(m.U - m.R) + ' retombent dans le budget' : '') : (nx ? 'Prévue le mois prochain : ' + eur(provRes(q, nextP(ps))) : 'Aucune réserve ce mois-ci')) + (q.repeat ? ' · chaque mois' : '') + '</div></span><span class="amt num">' + eur(Math.max(0, m.left)) + '</span>' + (m.R ? '<span class="minibar" style="flex-basis:100%"><b style="width:' + Math.round(pr * 100) + '%;background:' + (m.U > m.R ? 'var(--bad)' : 'var(--accent)') + '"></b></span>' : '') + '</button>'; } const bl = provBalance(q), pr = q.target ? Math.max(0, Math.min(1, bl / q.target)) : 0; return '<button class="exp" data-act="editProv" data-id="' + esc(q.id) + '" style="flex-wrap:wrap"><span class="t"><div>' + esc(q.name) + '</div><div class="small muted">' + eur(q.monthly) + ' par mois · disponible : <strong class="num" style="color:var(--ink)">' + eur(bl) + '</strong>' + (q.target ? ' sur ' + eur(q.target) : '') + '</div></span><span class="amt num">' + eur(bl) + '</span>' + (q.target ? '<span class="minibar" style="flex-basis:100%"><b style="width:' + Math.round(pr * 100) + '%;background:var(--accent)"></b></span>' : '') + '</button>'; }).join('') + '</section>';
   let h = '<section class="card"><div class="sect-title"><h2>Épargne de secours</h2><button class="btn sm primary" data-act="addRem">Noter une remise</button></div>' +
     '<p class="small muted" style="margin-bottom:10px">Un dépassement est ce que vous avez dû prendre sur l\'épargne de secours en fin de mois. L\'appli le calcule : dépenses du mois moins budget du mois.' + (S.refill && S.mode === 'auto' ? ' Il est ensuite retenu sur le budget du mois suivant.' : '') + '</p>' +
     brow('Dépassement du mois en cours' + (pc.over > 0 ? ' (provisoire)' : ''), eur(pc.over)) + brow('Dépassements des mois passés', eur(totalOver)) + brow('Déjà remis', '−' + eur(remis), 'neg') +
@@ -940,10 +972,14 @@ function efSheet() {
     '<div class="actions"><button type="submit" class="btn primary">Enregistrer</button><button type="button" class="btn" data-act="closeSheet">Annuler</button></div></form>');
 }
 function provSheet(q) {
+  const mode = q && q.mode !== 'month' ? 'cumul' : 'month', c0 = curP(), opts = [c0, nextP(c0), nextP(nextP(c0))]; if (q && q.mode === 'month' && !opts.includes(q.from)) opts.unshift(q.from);
   openSheet('<form id="provForm" class="stack" data-id="' + (q ? esc(q.id) : '') + '" novalidate><h2>' + (q ? 'Modifier la provision' : 'Nouvelle provision') + '</h2>' +
-    '<label class="f">Nom<input id="pName" autofocus autocomplete="off" maxlength="60" placeholder="Ex. Cadeaux, Voiture, Vacances" value="' + (q ? esc(q.name) : '') + '"></label>' +
-    '<div class="grid2 stackable"><label class="f">Mis de côté par mois<input id="pMonthly" inputmode="decimal" placeholder="0" value="' + (q ? toInput(q.monthly) : '') + '"></label><label class="f">Objectif (facultatif)<input id="pTarget" inputmode="decimal" placeholder="0" value="' + (q && q.target ? toInput(q.target) : '') + '"></label></div>' +
-    '<p class="small muted">Le montant mensuel est retiré de votre budget. Quand la dépense arrive, choisissez cette provision en la saisissant : elle ne pèse plus sur le budget.</p>' +
+    '<label class="f">Nom<input id="pName" autofocus autocomplete="off" maxlength="60" placeholder="Ex. Affaires de sport, Cadeaux" value="' + (q ? esc(q.name) : '') + '"></label>' +
+    '<label class="f">Type<select id="pMode"><option value="month"' + (mode === 'month' ? ' selected' : '') + '>Dépense du mois (remise à zéro)</option><option value="cumul"' + (mode === 'cumul' ? ' selected' : '') + '>Mise de côté qui s\'accumule</option></select></label>' +
+    '<div class="grid2 stackable"><label class="f"><span id="pMl">' + (mode === 'month' ? 'Montant réservé' : 'Mis de côté par mois') + '</span><input id="pMonthly" inputmode="decimal" placeholder="0" value="' + (q ? toInput(q.monthly) : '') + '"></label><label class="f" id="pTg"' + (mode === 'month' ? ' hidden' : '') + '>Objectif (facultatif)<input id="pTarget" inputmode="decimal" placeholder="0" value="' + (q && q.target ? toInput(q.target) : '') + '"></label></div>' +
+    '<div id="pMo"' + (mode === 'cumul' ? ' hidden' : '') + ' class="stack"><label class="f">À partir du mois<select id="pFrom">' + opts.map((k) => '<option value="' + k + '"' + ((q && q.mode === 'month' ? q.from : c0) === k ? ' selected' : '') + '>' + fmtRange(k, pend(k)) + '</option>').join('') + '</select></label>' +
+    '<label class="sw"><span>Reconduire chaque mois</span><input type="checkbox" id="pRepeat"' + (q && q.repeat ? ' checked' : '') + '></label></div>' +
+    '<p class="small muted" id="pHelp">' + (mode === 'month' ? 'Le montant est retiré du budget hebdo du mois. Rattachez-y vos achats à la saisie : ils n\'y pèsent plus. Ce qui dépasse retombe dans le budget de la semaine, ce qui n\'est pas utilisé y revient en fin de mois.' : 'Le montant mensuel est retiré de votre budget et s\'accumule. Quand la dépense arrive, choisissez cette provision en la saisissant.') + '</p>' +
     '<div class="actions"><button type="submit" class="btn primary">Enregistrer</button>' + (q ? '<button type="button" class="btn danger" data-act="delProv" data-id="' + esc(q.id) + '">Supprimer</button>' : '') + '<button type="button" class="btn" data-act="closeSheet">Annuler</button></div></form>');
 }
 function goalSheet(g) {
@@ -1041,8 +1077,8 @@ document.addEventListener('submit', async (ev) => {
     const name = $('#pName').value.trim(), monthly = parseMoney($('#pMonthly').value), target = parseMoney($('#pTarget').value || '0');
     if (!name) { toast('Donnez un nom à cette provision.'); return; }
     if (!(monthly > 0)) { toast('Saisissez le montant mensuel.'); return; }
-    const id = f.dataset.id || 'p_' + uid(), old = DOCS[id];
-    if (await write(() => store.set(id, { t: 'p', name, monthly, target: target > 0 ? target : 0, from: old ? old.from : curP(), ts: old ? old.ts : Date.now() }))) { closeSheet(); toast('Provision enregistrée'); }
+    const id = f.dataset.id || 'p_' + uid(), old = DOCS[id], mode = $('#pMode').value, doc = mode === 'month' ? { t: 'p', mode: 'month', name, monthly, repeat: $('#pRepeat').checked, from: $('#pFrom').value, ts: old ? old.ts : Date.now() } : { t: 'p', name, monthly, target: target > 0 ? target : 0, from: old && old.mode !== 'month' ? old.from : curP(), ts: old ? old.ts : Date.now() };
+    if (await write(() => store.set(id, doc))) { closeSheet(); toast('Provision enregistrée'); }
   } else if (f.id === 'goalForm') {
     const name = $('#gName').value.trim(), target = parseMoney($('#gTarget').value), start = parseMoney($('#gStart').value);
     if (!name) { toast('Donnez un nom à cet objectif.'); return; }
@@ -1209,6 +1245,7 @@ async function doConnect(btn) {
 }
 document.addEventListener('change', async (ev) => {
   const t = ev.target;
+  if (t.id === 'pMode') { const m = t.value === 'month'; $('#pMo').hidden = !m; $('#pTg').hidden = m; $('#pMl').textContent = m ? 'Montant réservé' : 'Mis de côté par mois'; $('#pHelp').textContent = m ? 'Le montant est retiré du budget hebdo du mois. Rattachez-y vos achats à la saisie : ils n\'y pèsent plus. Ce qui dépasse retombe dans le budget de la semaine, ce qui n\'est pas utilisé y revient en fin de mois.' : 'Le montant mensuel est retiré de votre budget et s\'accumule. Quand la dépense arrive, choisissez cette provision en la saisissant.'; return; }
   if (t.id === 'impFile' && t.files[0]) {
     try {
       const j = JSON.parse(await t.files[0].text()), docs = j.docs || {}, ids = Object.keys(docs).filter((k) => docs[k] && docs[k].t);
