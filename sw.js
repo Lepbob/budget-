@@ -1,5 +1,5 @@
 // Service worker : l'appli fonctionne hors ligne. Les appels à GitHub ne passent jamais par ici.
-const VERSION = 'budget-v6';
+const VERSION = 'budget-v8';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

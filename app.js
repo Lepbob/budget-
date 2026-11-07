@@ -247,6 +247,15 @@ function carryFor(w) {
   for (let k = start; k < w && i < 520; k = addDays(k, 7), i++) { const b = weekBase(k); c = Math.min(b, c + b - weekSpent(k)); }
   return c;
 }
+/* ---------- Enveloppes : un plafond par catégorie, jamais au-dessus du budget ---------- */
+const envSum = (cats) => (cats || S.cats).reduce((t, c) => t + (c.budget || 0), 0);
+const envCap = () => Math.max(0, weekBase(weekStartOf(today(), S.weekStart)));
+function envAuto() {
+  const cap = envCap(), since = addDays(today(), -56), w = {};
+  for (const e of EXPB) if (e.date >= since && catById(e.cat)) w[e.cat] = (w[e.cat] || 0) + e.amount;
+  let tot = S.cats.reduce((t, c) => t + (w[c.id] || 0), 0); const eq = tot <= 0;
+  return S.cats.map((c) => ({ ...c, budget: Math.floor(cap * (eq ? 1 / S.cats.length : (w[c.id] || 0) / tot) / 100) * 100 }));
+}
 function weekInfo(w) {
   const base = weekBase(w), carry = carryFor(w), avail = base + carry, spent = weekSpent(w);
   const ratio = avail > 0 ? spent / avail : (spent > 0 ? 2 : 0);
@@ -379,17 +388,19 @@ function viewWeek() {
   let reminder = '';
   const hasToday = EXP.some((e) => e.date === today());
   if (cur && !hasToday && new Date().getHours() >= 18) reminder = '<div class="alert info">Aucune dépense saisie aujourd\'hui. Ajoutez-les maintenant, ou passez si vous n\'avez rien dépensé.</div>';
-  const al = alertsFor(w).map((a) => '<div class="alert ' + (a.lvl === 'bad' ? 'bad' : '') + '">' + a.html + '</div>').join('');
+  const envWarn = envSum() > envCap() ? '<div class="alert bad">Vos enveloppes (' + eur(envSum()) + ') dépassent le budget de la semaine (' + eur(envCap()) + '). <button class="link" data-act="envFit">Réduire proportionnellement</button></div>' : '';
+  const al = envWarn + alertsFor(w).map((a) => '<div class="alert ' + (a.lvl === 'bad' ? 'bad' : '') + '">' + a.html + '</div>').join('');
   const rows = S.cats.filter((c) => c.budget || weekCat(w, c.id)).concat(
     EXPB.some((e) => !catById(e.cat) && weekStartOf(e.date, S.weekStart) === w) ? [{ id: '__x', name: 'Catégorie supprimée', budget: 0 }] : []);
   let cats = '';
   if (rows.length) {
-    cats = '<section class="card"><div class="sect-title"><h3>Par catégorie</h3></div>' + rows.map((c) => {
+    cats = '<section class="card"><div class="sect-title"><h3>Enveloppes de la semaine</h3>' + (envSum() ? '<span class="small muted num">réparti ' + eur(envSum()) + ' / ' + eur(envCap()) + '</span>' : '') + '</div>' + rows.map((c) => {
       const sp = c.id === '__x' ? EXPB.filter((e) => !catById(e.cat) && weekStartOf(e.date, S.weekStart) === w).reduce((s, e) => s + e.amount, 0) : weekCat(w, c.id);
       const r = c.budget ? sp / c.budget : 0;
       const col = c.budget ? (r > 1 ? 'var(--bad)' : r >= 0.8 ? 'var(--warn)' : catColor(c.id)) : catColor(c.id);
       const w100 = c.budget ? Math.min(100, Math.round(r * 100)) : 100;
-      return '<div class="catrow"><div class="catname"><span class="dot" style="background:' + catColor(c.id) + '"></span><span>' + esc(c.name) + '</span></div><div class="num small"><strong>' + eur(sp) + '</strong>' + (c.budget ? ' <span class="muted">/ ' + eur(c.budget) + '</span>' : '') + '</div>' +
+      const rl = c.budget ? (sp > c.budget ? '<span style="color:var(--bad);font-weight:700">dépassé de ' + eur(sp - c.budget) + '</span>' : '<span class="muted">reste ' + eur(c.budget - sp) + '</span>') : '';
+      return '<div class="catrow"><div class="catname">' + catIco(c.id) + '<span>' + esc(c.name) + '</span></div><div class="num small"><strong>' + eur(sp) + '</strong>' + (c.budget ? ' <span class="muted">/ ' + eur(c.budget) + '</span> · ' + rl : '') + '</div>' +
         '<div class="minibar"><b style="width:' + w100 + '%;background:' + col + ';' + (c.budget ? '' : 'opacity:.35') + '"></b></div></div>';
     }).join('') + '</section>';
   }
@@ -576,6 +587,19 @@ function curveCard(ps, pi) {
     '<div class="legend"><span>' + fmtShort(ps) + '</span><span>Pointillé : trajectoire du budget</span><span>' + fmtShort(pi.pe) + '</span></div>' +
     '<div class="stline" style="margin-top:10px"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ST_ICON[st] + '"/></svg>' + word + '</div><p class="small" style="margin-top:8px;text-align:center">' + txt + '</p></section>';
 }
+function envMonthCard(pi) {
+  if (!envSum()) return '';
+  const eff = Math.max(0, pi.budget); let allowedTot = 0;
+  const rows = S.cats.filter((c) => c.budget).map((c) => {
+    const al = Math.round(c.budget * pi.days / 7), sp = pi.cat[c.id] || 0, r = al ? sp / al : 0; allowedTot += al;
+    const col = r > 1 ? 'var(--bad)' : r >= 0.8 ? 'var(--warn)' : catColor(c.id);
+    return '<div class="catrow"><div class="catname">' + catIco(c.id) + '<span>' + esc(c.name) + '</span></div><div class="num small"><strong>' + eur(sp) + '</strong> <span class="muted">/ ' + eur(al) + '</span> · ' + (sp > al ? '<span style="color:var(--bad);font-weight:700">dépassé de ' + eur(sp - al) + '</span>' : '<span class="muted">reste ' + eur(al - sp) + '</span>') + '</div><div class="minibar"><b style="width:' + Math.min(100, Math.round(r * 100)) + '%;background:' + col + '"></b></div></div>';
+  }).join('');
+  const outside = Object.keys(pi.cat).filter((id) => { const c = catById(id); return !c || !c.budget; }).reduce((t, id) => t + pi.cat[id], 0);
+  return '<section class="card"><div class="sect-title"><h2>Enveloppes du mois</h2></div>' + rows +
+    (outside ? '<div class="brow"><span>Hors enveloppe</span><span class="num">' + eur(outside) + '</span></div>' : '') +
+    '<div class="brow"><span>Non réparti</span><span class="num">' + (eff >= allowedTot ? eur(eff - allowedTot) : '<span style="color:var(--bad);font-weight:700">−' + eur(allowedTot - eff) + '</span>') + '</span></div></section>';
+}
 function calendarCard(ps, pi) {
   const t = today(), lead = (parse(ps).getDay() + 6) % 7, total = Math.ceil((lead + pi.days) / 7) * 7;
   const out = {}, inc = {}, list = [];
@@ -604,7 +628,7 @@ function searchList() {
 function viewSearch() {
   return '<div class="weeknav"><button class="icon-btn" data-act="tab" data-tab="week" aria-label="Retour à la semaine"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><div class="label">Rechercher</div><span style="width:48px"></span></div>' +
     '<label class="f">Mot, magasin ou catégorie<input id="sQ" type="search" autocomplete="off" placeholder="Ex. Carrefour" value="' + esc(Q.q) + '"></label>' +
-    '<div><h3>Filtrer par catégorie</h3><div class="chips" style="margin-top:8px">' + S.cats.map((c) => '<button type="button" class="chip" data-act="sCat" data-id="' + esc(c.id) + '" aria-pressed="' + Q.cats.includes(c.id) + '"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true" style="color:' + catColor(c.id) + '"><path d="' + catIconPath(c.id) + '"/></svg>' + esc(c.name) + '</button>').join('') + '</div></div>' +
+    '<div><h3>Filtrer par catégorie</h3><div class="chips" style="margin-top:8px">' + S.cats.map((c) => '<button type="button" class="chip" data-act="sCat" data-id="' + esc(c.id) + '" aria-pressed="' + Q.cats.includes(c.id) + '">' + catIco(c.id) + '' + esc(c.name) + '</button>').join('') + '</div></div>' +
     '<section class="card" id="sRes">' + searchList() + '</section>';
 }
 function viewMonth() {
@@ -621,7 +645,7 @@ function viewMonth() {
     brow('Dépensé', eur(pi.spent)) + brow(pi.left < 0 ? 'Dépassement' : 'Reste', eur(Math.abs(pi.left)), 'total') + '</section>';
   if (pi.over > 0) h += '<div class="alert bad">' + (cur ? 'Budget du mois dépassé de <b>' + eur(pi.over) + '</b>. Prévoyez ce montant depuis l\'épargne de secours' + (S.refill && S.mode === 'auto' ? ' : il sera retenu sur le budget du mois suivant.' : '.') : 'Ce mois a dépassé son budget de <b>' + eur(pi.over) + '</b>, à remettre dans l\'épargne de secours.') + ' <button class="link" data-act="tab" data-tab="save">Voir l\'épargne de secours</button></div>';
   if (pi.inc.fallback && S.setupDone) h += '<div class="alert info">Aucun revenu saisi pour ce mois : le budget utilise vos revenus habituels (' + eur(S.income) + '). Ajoutez vos revenus réels ci-dessous. <button class="link" data-act="editIncTotal">Corriger le montant</button></div>';
-  h += curveCard(ps, pi) + calendarCard(ps, pi);
+  h += curveCard(ps, pi) + envMonthCard(pi) + calendarCard(ps, pi);
   if (cur) h += paceCard(ps) + balanceCard() + adviceCard();
   const prevHas = INC.some((i) => effP(i) === prevP(ps));
   h += '<section class="card"><div class="sect-title"><h2>Revenus du mois</h2><button class="btn sm primary" data-act="addInc">Ajouter</button></div>' +
@@ -724,6 +748,23 @@ function connectCard(inSettings) {
 const viewConnect = () => connectCard(false);
 
 /* --- Réglages --- */
+function envCard() {
+  const cap = envCap(), sum = envSum(), left = cap - sum, pc = cap ? Math.min(100, Math.round(sum / cap * 100)) : 0;
+  return '<section class="card" id="envCard"><div class="sect-title"><h2>Enveloppes</h2></div>' +
+    '<p class="small muted" style="margin-bottom:10px">Un plafond par semaine pour chaque catégorie. Le total des enveloppes ne peut pas dépasser le budget de la semaine.</p>' +
+    '<div class="brow"><span>Budget de la semaine</span><span class="num"><strong>' + eur(cap) + '</strong></span></div>' +
+    '<div class="brow"><span>Réparti dans les enveloppes</span><span class="num">' + eur(sum) + '</span></div>' +
+    '<div class="gauge" style="margin:8px 0"><b style="width:' + pc + '%;background:' + (sum > cap ? 'var(--bad)' : 'var(--accent)') + '"></b></div>' +
+    '<div class="brow total"><span>' + (left >= 0 ? 'Reste à répartir' : 'Dépassement') + '</span><span class="num" style="' + (left < 0 ? 'color:var(--bad)' : '') + '">' + eur(Math.abs(left)) + '</span></div>' +
+    (left < 0 ? '<div class="alert bad" style="margin-top:10px">Le budget a baissé : vos enveloppes dépassent le total. <button class="link" data-act="envFit">Réduire proportionnellement</button></div>' : '') +
+    '<div style="margin-top:14px">' + S.cats.map((c) => {
+      const max = cap - (sum - (c.budget || 0));
+      return '<div class="setrow">' + catIco(c.id) + '<input data-cname="' + esc(c.id) + '" value="' + esc(c.name) + '" aria-label="Nom de la catégorie"><input data-cbudget="' + esc(c.id) + '" inputmode="decimal" value="' + (c.budget ? toInput(c.budget) : '') + '" placeholder="Sans plafond" aria-label="Enveloppe hebdo de ' + esc(c.name) + ' (maximum ' + eur(Math.max(0, max)) + ')"><button class="icon-btn" data-act="delCat" data-id="' + esc(c.id) + '" aria-label="Supprimer ' + esc(c.name) + '"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>' +
+        '<div class="small muted" style="margin:2px 0 12px 0">' + (c.budget && cap ? Math.round(c.budget / cap * 100) + ' % du budget · ' : '') + 'maximum possible ' + eur(Math.max(0, max)) + '</div>';
+    }).join('') + '</div>' +
+    '<div class="actions" style="margin-top:12px"><button class="btn" data-act="addCat">Ajouter une catégorie</button></div>' +
+    '<div class="actions" style="margin-top:8px"><button class="btn" data-act="envAuto">Répartir selon mes dépenses</button><button class="btn" data-act="envEqual">Parts égales</button><button class="btn" data-act="envClear">Vider</button></div></section>';
+}
 function displayCard() {
   const ch = (act, v, label, on) => '<button type="button" class="chip" data-act="' + act + '" data-v="' + v + '" aria-pressed="' + on + '">' + label + '</button>';
   return '<section class="card stack"><h2>Affichage</h2><p class="small muted">Ces réglages sont propres à cet appareil.</p>' +
@@ -757,9 +798,7 @@ function viewSettings() {
     '<label class="sw"><span><strong>Réserver le remboursement de l\'épargne de secours</strong><div class="small muted">Le dépassement d\'un mois est retenu sur le budget du mois suivant.</div></span><input type="checkbox" data-set="refill"' + (S.refill ? ' checked' : '') + '></label>' +
     '<label class="sw"><span><strong>Lisser les charges non mensuelles</strong><div class="small muted">Annuelles, trimestrielles, hebdomadaires : réparties sur 12 mois au lieu d\'un seul prélèvement.</div></span><input type="checkbox" data-set="smooth"' + (S.smooth ? ' checked' : '') + '></label>' +
     '<label class="sw"><span><strong>Reporter l\'excédent et le dépassement</strong><div class="small muted">Un dépassement réduit la semaine suivante. Un excédent s\'y ajoute, dans la limite d\'un budget hebdo.</div></span><input type="checkbox" data-set="carry"' + (S.carry ? ' checked' : '') + '></label></section>' +
-    '<section class="card"><div class="sect-title"><h2>Catégories</h2></div><p class="small muted" style="margin-bottom:12px">Budget par semaine. Laissez vide pour ne pas fixer de plafond.</p>' +
-    S.cats.map((c) => '<div class="setrow"><input data-cname="' + esc(c.id) + '" value="' + esc(c.name) + '" aria-label="Nom de la catégorie"><input data-cbudget="' + esc(c.id) + '" inputmode="decimal" value="' + (c.budget ? toInput(c.budget) : '') + '" placeholder="Sans plafond" aria-label="Budget hebdo"><button class="icon-btn" data-act="delCat" data-id="' + esc(c.id) + '" aria-label="Supprimer ' + esc(c.name) + '"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>').join('') +
-    '<div class="actions" style="margin-top:12px"><button class="btn" data-act="addCat">Ajouter une catégorie</button></div></section>' +
+    envCard() +
     (FAV.length ? '<section class="card"><div class="sect-title"><h2>Favoris</h2></div><p class="small muted" style="margin-bottom:8px">Affichés en « Ajout rapide » sur l\'écran Semaine. Pour en créer un, cochez « Ajouter aux favoris » en saisissant une dépense.</p>' + FAV.map((f) => '<div class="brow"><span>' + esc(f.note || catName(f.cat)) + ' <span class="muted">· ' + eur(f.amount) + '</span></span><button class="link small" data-act="delFav" data-id="' + esc(f.id) + '">Retirer</button></div>').join('') + '</section>' : '') +
     displayCard() +
     lockCard() +
@@ -776,6 +815,21 @@ function openSheet(html) {
 function closeSheet() { $('#sheetWrap').hidden = true; $('#sheet').innerHTML = ''; document.body.style.overflow = ''; }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#sheetWrap').hidden) closeSheet(); });
 
+const TK_PROMPT = 'Lis ce ticket de caisse. Réponds uniquement par une ligne par article, au format « nom ; prix ; E ou S », avec la virgule comme séparateur décimal. E = essentiel (nourriture de base, hygiène, entretien), S = superflu (snacks, sodas, confiseries, gadgets). Termine par une ligne « Total ; montant ». N\'ajoute aucun commentaire.';
+function parseTicket(txt) {
+  const items = []; let total = 0, bad = 0;
+  for (let raw of String(txt || '').split(/\r?\n/)) {
+    raw = raw.replace(/^[\s*•\-–]+/, '').trim(); if (!raw) continue;
+    let name = '', price = NaN, flag = '';
+    const parts = raw.split(/;|\t/).map((x) => x.trim());
+    if (parts.length >= 2) { name = parts[0]; price = parseMoney(parts[1].replace(/€/g, '')); flag = parts[2] || ''; }
+    else { const m = raw.match(/^(.*?)[\s:–-]+(\d+(?:[.,]\d+)?)\s*€?\s*(essentiel|superflu|e|s)?$/i); if (m) { name = m[1]; price = parseMoney(m[2]); flag = m[3] || ''; } }
+    if (!name || !isFinite(price) || price <= 0) { if (raw) bad++; continue; }
+    if (/^(sous-)?total/i.test(name)) { if (!/^sous/i.test(name)) total = Math.round(price); continue; }
+    items.push({ n: name.slice(0, 60), a: Math.round(price), s: /^(s|superflu)/i.test(flag) ? 1 : 0 });
+  }
+  return { items, total, bad };
+}
 function itemRow(it) {
   it = it || {};
   return '<div class="itrow"><input class="itn" data-itn placeholder="Article" maxlength="60" autocomplete="off" value="' + esc(it.n || '') + '"><input class="ita" data-ita inputmode="decimal" placeholder="0" aria-label="Prix" value="' + (it.a ? toInput(it.a) : '') + '">' +
@@ -813,13 +867,17 @@ function expenseSheet(e) {
   openSheet('<form id="expForm" class="stack" data-id="' + (edit ? esc(e.id) : '') + '" data-ts="' + (edit ? e.ts || '' : '') + '" novalidate>' +
     '<h2>' + (edit ? 'Modifier la dépense' : 'Nouvelle dépense') + '</h2>' +
     '<label class="bigamt"><input id="fAmt" inputmode="none" autocomplete="off" placeholder="0" aria-label="Montant en euros" autofocus value="' + (edit ? toInput(e.amount) : '') + '"><span>€</span></label>' +
-    '<div class="chips" id="fCats" role="group" aria-label="Catégorie">' + S.cats.map((c) => '<button type="button" class="chip" data-cat="' + esc(c.id) + '" aria-pressed="' + (c.id === sel) + '"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true" style="color:' + catColor(c.id) + '"><path d="' + catIconPath(c.id) + '"/></svg>' + esc(c.name) + '</button>').join('') + '</div>' +
+    '<div class="chips" id="fCats" role="group" aria-label="Catégorie">' + S.cats.map((c) => '<button type="button" class="chip" data-cat="' + esc(c.id) + '" aria-pressed="' + (c.id === sel) + '">' + catIco(c.id) + '' + esc(c.name) + '</button>').join('') + '</div>' +
     '<div class="grid2 stackable"><label class="f">Date<input type="date" id="fDate" value="' + (edit ? e.date : today()) + '"></label><label class="f">Note (facultatif)<input id="fNote" list="noteList" autocomplete="off" maxlength="80" placeholder="Ex. Boulangerie" value="' + (edit ? esc(e.note || '') : '') + '"></label></div>' +
     '<p class="small sug" id="fSug" aria-live="polite"></p>' +
     '<div class="chips"><button type="button" class="chip" data-day="0">Aujourd\'hui</button><button type="button" class="chip" data-day="-1">Hier</button></div>' +
     '<div class="keypad" role="group" aria-label="Pavé numérique">' + ['1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '0', 'del'].map((k) => '<button type="button" class="key" data-act="key" data-k="' + k + '"' + (k === 'del' ? ' aria-label="Effacer"' : k === ',' ? ' aria-label="Virgule"' : '') + '>' + (k === 'del' ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 5H9l-6 7 6 7h12V5zM12 9l5 6M17 9l-5 6"/></svg>' : k) + '</button>').join('') + '</div>' +
     '<details' + (edit && e.ctx ? ' open' : '') + '><summary>Plus de détails</summary><p class="small muted" style="margin:6px 0 10px">Le contexte aide à repérer les achats impulsifs dans les statistiques.</p><div class="chips" id="fCtx" role="group" aria-label="Contexte">' + CTX.map((c) => '<button type="button" class="chip" data-ctx="' + c[0] + '" aria-pressed="' + (edit && e.ctx === c[0]) + '">' + c[1] + '</button>').join('') + '</div></details>' +
-    '<details id="fTk"' + (edit && e.items && e.items.length ? ' open' : '') + '><summary>Ticket de caisse (essentiel / superflu)</summary><p class="small muted" style="margin:6px 0 10px">Listez les articles du ticket et marquez ceux qui sont superflus : cela affine l\'analyse du mois.</p><div id="tkRows">' + (edit && e.items ? e.items.map(itemRow).join('') : '') + '</div><div class="actions"><button type="button" class="btn" data-act="itemAdd">Ajouter un article</button></div><p class="small" id="tkSum" style="margin-top:8px"></p></details>' +
+    '<details id="fTk"' + (edit && e.items && e.items.length ? ' open' : '') + '><summary>Ticket de caisse (essentiel / superflu)</summary><p class="small muted" style="margin:6px 0 10px">Listez les articles du ticket et marquez ceux qui sont superflus : cela affine l\'analyse du mois.</p><div id="tkRows">' + (edit && e.items ? e.items.map(itemRow).join('') : '') + '</div><div class="actions"><button type="button" class="btn" data-act="itemAdd">Ajouter un article</button><button type="button" class="btn" data-act="tkPasteOpen">Coller un ticket</button></div>' +
+    '<div id="tkPasteBox" hidden class="stack" style="margin-top:10px"><p class="small muted">Photographiez le ticket dans votre assistant IA avec la consigne ci-dessous, puis collez sa réponse ici.</p>' +
+    '<label class="f">Consigne à donner à l\'IA<textarea id="tkPrompt" readonly rows="5">' + esc(TK_PROMPT) + '</textarea></label><div class="actions"><button type="button" class="btn sm" data-act="tkCopyPrompt">Copier la consigne</button></div>' +
+    '<label class="f">Réponse de l\'IA<textarea id="tkPaste" rows="6" placeholder="Pâtes ; 1,20 ; E&#10;Chips ; 2,15 ; S&#10;Total ; 38,60"></textarea></label><div class="actions"><button type="button" class="btn primary" data-act="tkImport">Lire la liste</button></div></div>' +
+    '<p class="small" id="tkSum" style="margin-top:8px"></p></details>' +
     (PROV.length ? '<label class="f">Payer avec une provision<select id="fProv"><option value="">Non, budget normal</option>' + PROV.map((q) => '<option value="' + esc(q.id) + '"' + (edit && e.prov === q.id ? ' selected' : '') + '>' + esc(q.name) + ' (' + eur(provBalance(q)) + ')</option>').join('') + '</select></label>' : '') +
     (edit ? '' : '<label class="sw"><span>Ajouter aux favoris (ajout en un toucher)</span><input type="checkbox" id="fFav"></label>') +
     '<datalist id="noteList">' + topNotes().map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
@@ -1072,6 +1130,19 @@ document.addEventListener('click', async (ev) => {
     case 'uiTs': saveUI({ ts: +el.dataset.v }); render(); break;
     case 'uiDens': saveUI({ dens: el.dataset.v }); render(); break;
     case 'uiAnim': saveUI({ anim: !UI.anim }); render(); break;
+    case 'tkPasteOpen': { const b = $('#tkPasteBox'); b.hidden = !b.hidden; if (!b.hidden) $('#tkPaste').focus(); break; }
+    case 'tkCopyPrompt': { const ta = $('#tkPrompt'); try { await navigator.clipboard.writeText(ta.value); toast('Consigne copiée'); } catch (e) { ta.focus(); ta.select(); toast('Sélectionnée : copiez-la avec votre clavier'); } break; }
+    case 'tkImport': {
+      const r = parseTicket($('#tkPaste').value);
+      if (!r.items.length) { toast('Aucun article lu. Vérifiez le format : nom ; prix ; E ou S'); break; }
+      $('#tkRows').innerHTML = r.items.map(itemRow).join('');
+      const sum = r.items.reduce((t, i) => t + i.a, 0), a = $('#fAmt');
+      if (!a.value.trim()) a.value = toInput(r.total || sum);
+      const cur = Math.round(parseMoney(a.value) || 0);
+      $('#tkPasteBox').hidden = true; ticketSum();
+      toast(r.items.length + ' article' + (r.items.length > 1 ? 's' : '') + ' lu' + (r.items.length > 1 ? 's' : '') + (r.bad ? ', ' + r.bad + ' ligne' + (r.bad > 1 ? 's' : '') + ' ignorée' + (r.bad > 1 ? 's' : '') : '') + (cur && sum > cur ? '. Attention : la somme dépasse le total' : ''));
+      break;
+    }
     case 'itemAdd': { $('#tkRows').insertAdjacentHTML('beforeend', itemRow()); const r = $('#tkRows').lastElementChild.querySelector('[data-itn]'); r.focus(); break; }
     case 'itemDel': el.closest('.itrow').remove(); ticketSum(); break;
     case 'itemTog': { const on = el.getAttribute('aria-pressed') !== 'true'; el.setAttribute('aria-pressed', on); el.textContent = on ? 'Superflu' : 'Essentiel'; ticketSum(); break; }
@@ -1096,6 +1167,10 @@ document.addEventListener('click', async (ev) => {
       if (await saveSettings({ setupDone: true, income: inc, savings: isFinite(sv) ? sv : 0, monthStart: ms, startDate: today() })) { tab = 'fixed'; render(); toast('Ajoutez maintenant vos charges fixes'); }
       break;
     }
+    case 'envAuto': await saveSettings({ cats: envAuto() }); toast('Enveloppes réparties selon vos 8 dernières semaines'); render(); break;
+    case 'envEqual': { const cap = envCap(), n = S.cats.length, v = Math.floor(cap / n / 100) * 100; await saveSettings({ cats: S.cats.map((c) => ({ ...c, budget: v })) }); toast('Parts égales : ' + eur(v) + ' par catégorie'); render(); break; }
+    case 'envClear': await saveSettings({ cats: S.cats.map((c) => ({ ...c, budget: 0 })) }); render(); break;
+    case 'envFit': { const cap = envCap(), sum = envSum(); if (sum > cap && sum > 0) { await saveSettings({ cats: S.cats.map((c) => ({ ...c, budget: Math.floor((c.budget || 0) * cap / sum / 100) * 100 })) }); toast('Enveloppes réduites pour tenir dans le budget'); render(); } break; }
     case 'addCat': await saveSettings({ cats: [...S.cats, { id: 'c' + uid(), name: 'Nouvelle catégorie', budget: 0 }] }); render(); break;
     case 'delCat': if (S.cats.length > 1) { await saveSettings({ cats: S.cats.filter((c) => c.id !== id) }); render(); } else toast('Gardez au moins une catégorie.'); break;
     case 'expJson': doDownload('budget-hebdo.json', JSON.stringify({ version: 1, docs: bare(liveDocs()) }, null, 1), 'application/json'); break;
@@ -1150,7 +1225,15 @@ document.addEventListener('change', async (ev) => {
     if (k === 'weekStart') { v = +v; await saveSettings({ weekStart: v }); weekSel = null; } else if (k === 'monthStart') { v = +v; await saveSettings({ monthStart: v }); monthSel = null; } else if (k === 'savingsDay') { await saveSettings({ savingsDay: +v }); } else await saveSettings({ [k]: v });
     render();
   } else if (t.dataset.cname) { await saveSettings({ cats: S.cats.map((c) => c.id === t.dataset.cname ? { ...c, name: t.value.trim() || c.name } : c) }); render(); }
-  else if (t.dataset.cbudget) { const v = t.value.trim() ? parseMoney(t.value) : 0; if (isFinite(v) && v >= 0) await saveSettings({ cats: S.cats.map((c) => c.id === t.dataset.cbudget ? { ...c, budget: v } : c) }); render(); }
+  else if (t.dataset.cbudget) {
+    let v = t.value.trim() ? parseMoney(t.value) : 0;
+    if (isFinite(v) && v >= 0) {
+      const cur = S.cats.find((c) => c.id === t.dataset.cbudget), max = Math.max(0, envCap() - (envSum() - (cur ? cur.budget || 0 : 0)));
+      if (v > max) { v = max; toast('Limité à ' + eur(max) + ' : le total des enveloppes ne peut pas dépasser le budget (' + eur(envCap()) + ')'); }
+      await saveSettings({ cats: S.cats.map((c) => c.id === t.dataset.cbudget ? { ...c, budget: v } : c) });
+    }
+    render();
+  }
 });
 
 /* ---------- Verrouillage par code (chiffre le token GitHub) ---------- */

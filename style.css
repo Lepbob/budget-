@@ -180,7 +180,11 @@ table.t td { padding-block: 8px; border-top: 1px solid var(--line); text-align: 
 .goal .bar b { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
 .inline { display: flex; gap: 8px; margin-top: 10px; }
 .inline input { flex: 1; }
-.setrow { display: grid; grid-template-columns: 1fr 120px 40px; gap: 8px; align-items: center; }
+.setrow { display: grid; grid-template-columns: 24px 1fr 120px 40px; gap: 8px; align-items: center; }
+#envCard .setrow { grid-template-columns: auto minmax(0,1fr) auto; }
+#envCard .setrow [data-cbudget] { grid-column: 1 / -1; grid-row: 2; }
+#envCard .setrow .icon-btn { grid-column: 3; grid-row: 1; }
+#envCard .setrow input { min-width: 0; }
 .setrow + .setrow { margin-top: 8px; }
 .sw { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .skeleton { height: 160px; border-radius: 14px; background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%); background-size: 200% 100%; animation: sh 1.4s infinite linear; }
@@ -340,3 +344,5 @@ html[data-dens="compact"] .key { height: 50px; }
 input[type="search"] { -webkit-appearance: none; appearance: none; }
 .top .brand { font-size: 18px; white-space: nowrap; }
 .badge span { white-space: nowrap; }
+
+textarea { width: 100%; background: var(--bg); border: 2px solid var(--edge); border-radius: 12px; padding: 10px 12px; font: inherit; font-size: 15px; color: var(--ink); resize: vertical; }
