@@ -359,9 +359,8 @@ function render() {
   if (LOADING) { v.innerHTML = '<div class="skeleton"></div><div class="skeleton" style="height:90px"></div>'; return; }
   const connecting = !cfg && !noSync;
   $('#tabbar').hidden = connecting;
-  if (connecting) { v.innerHTML = viewConnect(); $('#fab').hidden = true; return; }
+  if (connecting) { v.innerHTML = viewConnect(); return; }
   v.innerHTML = ({ week: viewWeek, month: viewMonth, fixed: viewFixed, save: viewSave, gear: viewSettings, search: viewSearch }[tab])();
-  $('#fab').hidden = tab === 'gear';
 }
 function renderSoon() {
   const a = document.activeElement;
