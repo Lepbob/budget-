@@ -1,29 +1,32 @@
-/* Mise en page : une colonne mobile (640px max), onglets en bas, bouton + flottant.
-   Le chiffre « reste à dépenser » domine l'écran Semaine ; tout le reste est discret. */
+/* Mise en page : une colonne mobile (640px max), onglets en bas.
+   Thème « Le bocal » : doux, humain, vert sauge et miel. */
 :root {
-  --bg: #FFFFFF; --surface: #FFFFFF; --surface-2: #F0F0F0; --ink: #0A0A0A; --muted: #3D3D3D; --line: #C4C4C4; --edge: #0A0A0A;
-  --accent: #0B3FCC; --accent-ink: #FFFFFF; --accent-soft: #E4ECFF;
-  --ok: #0B6B2E; --ok-soft: #DDF3E4; --warn: #7A4A00; --warn-soft: #FFF1CC; --bad: #A4160A; --bad-soft: #FADFDB;
-  --scrim: rgba(0, 0, 0, .55);
-  --shadow: none;
-  --font-display: 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-body: 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --bg: #F2F5EF; --surface: #FBFCF9; --surface-2: #E4EADF; --ink: #2C3A34; --muted: #586A61; --line: #DCE3D8; --edge: #DCE3D8;
+  --accent: #2F5E49; --accent-ink: #FFFFFF; --accent-soft: #E3EEE6;
+  --ok: #2F5E49; --ok-soft: #E3EEE6; --warn: #8A5A12; --warn-soft: #FBEBCB; --bad: #9C3F2F; --bad-soft: #F6DDD6;
+  --scrim: rgba(30, 40, 34, .45);
+  --shadow: 0 1px 2px rgba(44,58,52,.06), 0 6px 18px rgba(44,58,52,.06);
+  --font-display: 'Nunito', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: 'Nunito', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --honey: #F0BE7E; --honey-2: #EFB06A; --glass: #7E978A; --glass-bg: #FBFCF9; --cork: #D2A66E;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #000000; --surface: #000000; --surface-2: #1B1B1B; --ink: #FFFFFF; --muted: #D4D4D4; --line: #4A4A4A; --edge: #FFFFFF;
-    --accent: #8DB4FF; --accent-ink: #000000; --accent-soft: #0F2147;
-    --ok: #6FE3A0; --ok-soft: #0B2A1A; --warn: #FFC24D; --warn-soft: #2E2100; --bad: #FF8F85; --bad-soft: #3A1512;
-    --scrim: rgba(0, 0, 0, .75);
+    --bg: #1B211E; --surface: #242C28; --surface-2: #2E3732; --ink: #EDF1EA; --muted: #A9B7AE; --line: #3A4640; --edge: #3A4640;
+    --accent: #8FC3A6; --accent-ink: #12241B; --accent-soft: #2A3F35;
+    --ok: #8FC3A6; --ok-soft: #24382F; --warn: #E8B766; --warn-soft: #3A2E17; --bad: #E58F7C; --bad-soft: #40231D;
+    --scrim: rgba(0, 0, 0, .6);
+    --shadow: none; --glass: #8DA899; --glass-bg: #E4EBE1;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #000000; --surface: #000000; --surface-2: #1B1B1B; --ink: #FFFFFF; --muted: #D4D4D4; --line: #4A4A4A; --edge: #FFFFFF;
-  --accent: #8DB4FF; --accent-ink: #000000; --accent-soft: #0F2147;
-  --ok: #6FE3A0; --ok-soft: #0B2A1A; --warn: #FFC24D; --warn-soft: #2E2100; --bad: #FF8F85; --bad-soft: #3A1512;
-  --scrim: rgba(0, 0, 0, .75);
+  --bg: #1B211E; --surface: #242C28; --surface-2: #2E3732; --ink: #EDF1EA; --muted: #A9B7AE; --line: #3A4640; --edge: #3A4640;
+  --accent: #8FC3A6; --accent-ink: #12241B; --accent-soft: #2A3F35;
+  --ok: #8FC3A6; --ok-soft: #24382F; --warn: #E8B766; --warn-soft: #3A2E17; --bad: #E58F7C; --bad-soft: #40231D;
+  --scrim: rgba(0, 0, 0, .6);
+  --shadow: none; --glass: #8DA899; --glass-bg: #E4EBE1;
   color-scheme: dark;
 }
 html { zoom: var(--ts, 1.1); }
@@ -351,3 +354,82 @@ textarea { width: 100%; background: var(--bg); border: 2px solid var(--edge); bo
 .exp.provx .amt, .exp.provx .t > div:first-child { color: var(--muted); }
 .exp.provx .ibox { opacity: .5; }
 .exp.provx .amt { text-decoration: none; font-weight: 500; }
+
+/* ===== Thème C « Le bocal » : doux et humain (remplace les bordures épaisses de D) ===== */
+:root { --r: 24px; }
+h3 { font-size: 13px; font-weight: 700; letter-spacing: .05em; }
+.card { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow); padding: var(--pad) calc(var(--pad) + 2px); }
+.card.empty { border-style: dashed; box-shadow: none; background: transparent; }
+.icon-btn { border: 0; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow); width: 46px; height: 46px; }
+.topr .icon-btn { width: 44px; height: 44px; }
+.badge { border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-weight: 700; }
+.btn { border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-weight: 700; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 800; }
+.btn.danger { color: var(--bad); border-color: var(--bad); background: transparent; }
+input, select { border: 1.5px solid var(--line); border-radius: 16px; background: var(--surface); }
+input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+label.f { font-weight: 700; color: var(--muted); }
+.chip { border: 1.5px solid var(--line); border-radius: 999px; background: var(--surface); font-weight: 700; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip[aria-pressed="true"]::before { background: var(--accent); }
+.alert { border: 1.5px solid var(--warn); border-radius: 18px; background: var(--warn-soft); }
+.alert.bad { border-color: var(--bad); background: var(--bad-soft); } .alert.info { border-color: var(--accent); background: var(--accent-soft); }
+.exp { border-top: 1px solid var(--line); }
+.day { border-bottom: 1px solid var(--line); color: var(--muted); }
+.tag { border: 1px solid var(--line); color: var(--muted); background: var(--surface-2); }
+.tag.imp { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); }
+.brow.total { border-top: 1px solid var(--line); font-weight: 800; }
+.gauge, .minibar, .hbar .track, .goal .bar { border: 0; border-radius: 999px; background: var(--surface-2); }
+.gauge > b, .minibar > b, .hbar .track b, .goal .bar b { border-radius: 999px; }
+.gauge { height: 14px; } .minibar, .hbar .track { height: 10px; } .goal .bar { height: 14px; }
+.ibox { border-width: 0; border-radius: 16px; }
+.swr { border-top: 1px solid var(--line); }
+.key { border: 0; border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); }
+.key:active { background: var(--accent-soft); }
+.bigamt { border-bottom: 2px solid var(--line); }
+.toast { border: 0; border-radius: 999px; box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+.skeleton { border: 1px solid var(--line); }
+.curve .axis { stroke: var(--line); stroke-width: 1.5; }
+.curve .ideal { stroke: var(--muted); stroke-width: 1.5; }
+.cc { border-radius: 14px; }
+.bigbtn { border-radius: 999px; min-height: 60px; font-size: 18px; font-weight: 800; }
+
+/* Barre d'onglets : pastille flottante */
+nav.tabs { background: transparent; border: 0; padding: 0 max(12px, env(safe-area-inset-left, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)); pointer-events: none; }
+nav.tabs .in { pointer-events: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 30px; box-shadow: 0 6px 22px rgba(44,58,52,.14); padding: 5px; gap: 4px; }
+.tab { border-radius: 24px; min-height: 56px; font-size: 12px; font-weight: 700; color: var(--muted); border-bottom: 0; padding-top: 6px; }
+.tab svg { width: 24px; height: 24px; stroke-width: 1.9; }
+.tab[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 800; border-bottom: 0; }
+
+/* Feuille de saisie */
+.sheet { border: 0; border-radius: 30px 30px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,.16); }
+@media (min-width: 700px) { .sheet { border: 0; border-radius: 30px; } }
+
+/* Semaine : le bocal gradué */
+.hero { padding: 18px var(--pad) var(--pad); text-align: center; }
+.jar { position: relative; width: 282px; height: 270px; max-width: 100%; margin: 0 auto; }
+.jar svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.jar .jg { fill: var(--glass-bg); } .jar .jgl { fill: none; stroke: var(--glass); stroke-width: 3.5; stroke-linejoin: round; }
+.jar .jh1 { fill: var(--honey); transition: d .6s cubic-bezier(.2,.8,.2,1); } .jar .jh2 { fill: var(--honey-2); opacity: .55; }
+.jar .jr1 { fill: #D06A55; } .jar .jr2 { fill: #B8503B; opacity: .5; }
+.jar .jb { fill: #FBE3BF; opacity: .75; }
+.jar .jpace { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: .55; }
+.jar .jtk { stroke: var(--glass); stroke-linecap: round; }
+.jar .jhl { fill: none; stroke: #fff; stroke-width: 5; stroke-linecap: round; opacity: .55; }
+.jar .jrim { fill: var(--glass-bg); stroke: var(--glass); stroke-width: 3.5; }
+.jar .jt { position: absolute; line-height: 1; pointer-events: none; color: var(--ink); }
+.jar .jlv { left: 0; width: 54px; text-align: right; font-size: 12px; font-weight: 800; }
+.jar .jpc { left: 62px; width: 100px; text-align: center; font-size: 26px; font-weight: 800; }
+.jar .jpl { left: 0; width: 54px; text-align: right; font-size: 11px; font-weight: 600; color: var(--muted); }
+.jar .jtl { left: 157px; width: 46px; text-align: right; line-height: 1.05; }
+.jar .jtl b { display: block; font-size: 11px; font-weight: 800; }
+.jar .jtl i { display: block; font-style: normal; font-size: 9.5px; font-weight: 700; opacity: .75; }
+.hero .big { font-size: 44px; font-weight: 800; margin: 2px 0 0; line-height: 1.05; }
+.hero.bad .big { color: var(--bad); }
+.hero .jtitle { font-size: 17px; font-weight: 800; margin-top: 2px; }
+.hero .lbl { font-size: 14px; font-weight: 600; color: var(--muted); margin-top: 2px; }
+.stline { border: 0; background: var(--st-soft, var(--accent-soft)); border-radius: 999px; font-weight: 700; font-size: 15px; }
+.hero.warn .stline { --st-soft: var(--warn-soft); } .hero.bad .stline { --st-soft: var(--bad-soft); }
+.hero .meta { color: var(--muted); }
+.jar .jpc, .jar .jtl { color: #2C3A34; } .jar .jtl i { color: #4C3F2A; }
+.jar .jpace { stroke: #2C3A34; }

@@ -383,6 +383,47 @@ function toast(msg, undo) {
 }
 
 /* --- Semaine --- */
+/* Bocal gradué : 0 € en bas, budget complet en haut ; le miel baisse quand on dépense, le rouge monte depuis le fond en cas de dépassement. */
+function jarHtml(inf, paceLeft) {
+  const Y0 = 236, YTOP = 100, B = inf.avail > 0 ? inf.avail : Math.max(inf.spent, 100);
+  const PXE = (Y0 - YTOP) / (B / 100), yOf = (c) => Y0 - Math.max(0, Math.min(c, B)) / 100 * PXE;
+  const left = inf.left, over = left < 0;
+  const ly = yOf(Math.max(0, left));
+  const wave = (y, k) => 'M0 ' + y + ' Q 27.5 ' + (y - k) + ' 55 ' + y + ' T 110 ' + y + ' T 165 ' + y + ' T 220 ' + y + ' T 275 ' + y + ' V 270 H 0 Z';
+  const raw = inf.avail > 0 ? inf.spent / B * 100 : 0, noPct = inf.avail <= 0;
+  const sp = inf.spent >= B ? Math.round(raw) : Math.min(99, Math.round(raw));
+  const pctTxt = noPct ? '' : inf.spent > 0 && sp === 0 ? '< 1 %' : sp + ' %';
+  const redY = over ? Y0 - Math.min(-left / 100, B / 100) * PXE : 270;
+  const pctInRed = over && redY - 30 < 120;
+  const pctY = over ? (pctInRed ? redY + 36 : redY - 30) : (ly > 150 ? 128 : ly + 36);
+  const showPace = paceLeft != null && inf.avail > 0 && !over;
+  const py = showPace ? yOf(paceLeft) : 0;
+  const shape = 'M93 38 H189 C189 38 221 58 221 98 V208 a30 30 0 0 1 -30 30 H91 a30 30 0 0 1 -30 -30 V98 C61 58 93 38 93 38 Z';
+  let ticks = '', labels = '';
+  [12.5, 25, 37.5, 50, 62.5, 75, 87.5, 100].forEach((p) => {
+    const y = yOf(B * p / 100), major = p % 25 === 0;
+    ticks += '<line class="jtk" x1="' + (major ? 206 : 212) + '" y1="' + y.toFixed(1) + '" x2="218" y2="' + y.toFixed(1) + '" stroke-width="' + (major ? 2.4 : 1.6) + '"/>';
+    if (major && p < 100) labels += '<div class="jt jtl" style="top:' + (y - 11).toFixed(1) + 'px"><b class="num">' + (100 - p) + ' %</b><i class="num">' + eur(Math.round(B * (100 - p) / 10000) * 100) + '</i></div>';
+  });
+  const bub = [[86, 218, 6], [112, 228, 4], [132, 212, 5]].filter((q) => !over && q[1] - q[2] > ly + 6).map((q) => '<circle class="jb" cx="' + q[0] + '" cy="' + q[1] + '" r="' + q[2] + '"/>').join('');
+  const short = over ? '−' + eur(-left).replace(/\s?€/, '') : eur(left).replace(/\s?€/, '');
+  const aria = (over ? 'Budget dépassé de ' + eur(-left) : 'Il reste ' + eur(left)) + ' sur ' + eur(inf.avail) + (noPct ? '' : ', soit ' + pctTxt + ' du budget dépensé');
+  return '<div class="jar"><svg viewBox="0 0 282 270" role="img" aria-label="' + aria + '"><defs><clipPath id="jarc"><path d="' + shape + '"/></clipPath></defs>' +
+    '<path class="jg" d="' + shape + '"/><g clip-path="url(#jarc)">' +
+    '<path class="jh1" d="' + wave((over || left <= 0 ? 252 : ly).toFixed(1), 9) + '"/><path class="jh2" d="' + wave((over || left <= 0 ? 262 : ly + 9).toFixed(1), 7) + '"/>' +
+    (over ? '<path class="jr1" d="' + wave(redY.toFixed(1), 9) + '"/><path class="jr2" d="' + wave((redY + 9).toFixed(1), 7) + '"/>' : '') + bub +
+    (showPace ? '<line class="jpace" x1="64" y1="' + py.toFixed(1) + '" x2="152" y2="' + py.toFixed(1) + '"/>' : '') + '</g>' +
+    '<path d="M103 18 H183 L179 60 H107 Z" fill="#D2A66E" stroke="#D2A66E" stroke-width="5" stroke-linejoin="round"/>' +
+    '<path d="M105 22 L110 58 H106 Z" fill="#E4C391" opacity=".85"/><path d="M181 22 L177 58 H182 Z" fill="#B98B55" opacity=".75"/>' +
+    '<g fill="#A57843" opacity=".75"><ellipse cx="118" cy="27" rx="3" ry="1.6"/><ellipse cx="136" cy="44" rx="2.2" ry="1.3"/><ellipse cx="152" cy="26" rx="3.2" ry="1.5"/><ellipse cx="166" cy="48" rx="2.4" ry="1.4"/><ellipse cx="124" cy="54" rx="2" ry="1.2"/><ellipse cx="172" cy="31" rx="2.4" ry="1.3"/><ellipse cx="146" cy="54" rx="2.8" ry="1.2"/><circle cx="112" cy="40" r="1.4"/><circle cx="158" cy="38" r="1.3"/><circle cx="130" cy="31" r="1.2"/></g>' +
+    '<g fill="#EBD0A3" opacity=".9"><ellipse cx="128" cy="23" rx="2.4" ry="1.1"/><ellipse cx="160" cy="22" rx="2.2" ry="1.1"/><ellipse cx="143" cy="36" rx="2.4" ry="1.2"/><circle cx="172" cy="42" r="1.2"/><circle cx="114" cy="50" r="1.1"/></g>' +
+    '<rect x="107" y="38" width="72" height="10" fill="#8C6334" opacity=".18"/><ellipse cx="143" cy="18" rx="42" ry="5" fill="#E2BE8A" stroke="#B98B55" stroke-width="1.5"/>' +
+    ticks + '<path class="jgl" d="' + shape + '"/><rect class="jrim" x="88" y="33" width="110" height="10" rx="5"/>' +
+    '<path d="M103 47 H183" stroke="#8C6334" stroke-width="3" stroke-linecap="round" opacity=".25"/><path class="jhl" d="M77 128 q-6 8 -6 24"/></svg>' +
+    '<div class="jt jlv num" style="top:' + (ly - 6).toFixed(1) + 'px">' + short + '</div>' +
+    (showPace ? '<div class="jt jpl" style="top:' + (py - 6).toFixed(1) + 'px">rythme</div>' : '') +
+    (noPct ? '' : '<div class="jt jpc num" style="top:' + (pctY - 13).toFixed(1) + 'px;opacity:' + (over ? .9 : .55) + ';color:' + (over ? (pctInRed ? '#FFFFFF' : '#7A2E20') : '#5A3A08') + '">' + pctTxt + '</div>') + labels + '</div>';
+}
 function viewWeek() {
   const w = weekSel, cur = w === curWeek();
   const nav = '<div class="weeknav"><button class="icon-btn" data-act="wk" data-d="-7" aria-label="Semaine précédente"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>' +
@@ -392,11 +433,11 @@ function viewWeek() {
     '<button class="icon-btn" data-act="wk" data-d="7" aria-label="Semaine suivante"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>';
   if (!S.setupDone) return nav + onboarding();
   const inf = weekInfo(w);
-  const stLong = { ok: 'Dans le budget', warn: 'Attention : budget presque atteint', bad: 'Budget dépassé' }[inf.st];
+  const stLong = { ok: 'Une semaine sereine', warn: 'On garde un œil dessus', bad: 'Budget dépassé' }[inf.st];
   const days = cur ? 7 - diffDays(today(), w) : 0, elapsed = cur ? 8 - days : 7;
-  const dash = (Math.min(inf.ratio, 1) * Math.PI * 90).toFixed(1);
-  const hero = '<section class="card hero ' + inf.st + '"><div class="hg"><svg viewBox="0 0 200 112" role="img" aria-label="' + eur(inf.spent) + ' dépensés sur ' + eur(inf.avail) + ' : ' + stLong + '"><path class="trk" d="M 10 100 A 90 90 0 0 1 190 100"/><path class="val" d="M 10 100 A 90 90 0 0 1 190 100" stroke-dasharray="' + dash + ' 400"/></svg>' +
-    '<div class="hgt"><div class="big num">' + eur(Math.abs(inf.left)) + '</div><div class="lbl">' + (inf.left < 0 ? 'de dépassement' : 'restants sur ' + eur(inf.avail)) + '</div></div></div>' +
+  const hero = '<section class="card hero ' + inf.st + '">' + jarHtml(inf, cur ? inf.avail * (7 - elapsed) / 7 : null) +
+    '<div class="big num">' + (inf.left < 0 ? '− ' : '') + eur(Math.abs(inf.left)) + '</div><div class="jtitle">' + (inf.left < 0 ? 'de dépassement' : 'restants') + '</div>' +
+    '<div class="lbl">' + (inf.avail > 0 ? 'sur ' + eur(inf.avail) + ' cette semaine' : 'aucun budget cette semaine') + '</div>' +
     '<div class="stline"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ST_ICON[inf.st] + '"/></svg>' + stLong + '</div>' +
     '<div class="meta num"><span><strong>' + eur(inf.spent) + '</strong> dépensés</span><span>Budget <strong>' + eur(inf.base) + '</strong></span>' +
     (inf.carry ? '<span>' + (inf.carry > 0 ? 'Report <strong>+' : 'Report <strong>−') + eur(Math.abs(inf.carry)) + '</strong></span>' : '') + '</div></section>';
