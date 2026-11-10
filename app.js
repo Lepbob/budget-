@@ -270,18 +270,16 @@ function weekMap() {
 const weekSpent = (w) => weekMap()[w] || 0;
 const weekCat = (w, cat) => ((X.wc || (weekMap(), X.wc))[w] || {})[cat] || 0;
 function carryFor(w) {
+  // Objectif : finir le mois de paie à l'équilibre. Le budget d'un tronçon de semaine = ce qui reste du budget du mois au début du tronçon,
+  // réparti à parts égales sur les jours restants du mois (un dépassement réduit les semaines suivantes, une économie les augmente).
   if (!S.carry) return 0;
-  const start = pstart(S.startDate || today()); // le report démarre au début du mois de paie où l'appli a été configurée (les semaines déjà passées de ce mois comptent)
-  if (w <= start) return 0;
-  let c = 0, i = 0;
-  // Dans un mois de paie : un dépassement se reporte en entier, un excédent est plafonné à un budget de tronçon.
-  // À la fin du mois : l'excédent est abandonné (il reste sur le compte) ; le négatif est repris par le « remboursement » du mois suivant
-  // (mode automatique) ou reporté tel quel (mode manuel / remboursement désactivé).
-  for (let k = start; k < w && i < 520; k = nextSeg(k), i++) {
-    const b = weekBase(k); c = Math.min(b, c + b - weekSpent(k));
-    if (nextSeg(k) > pend(pstart(k))) c = S.mode === 'auto' && S.refill ? 0 : Math.min(0, c);
-  }
-  return c;
+  const ps = pstart(w), first = pstart(S.startDate || today());
+  if (ps < first) return 0;
+  const pi = periodInfo(ps), bud = Math.max(0, pi.budget), d0 = diffDays(w, ps), dF = pi.days - d0;
+  let before = 0; for (const e of EXPB) if (e.date >= ps && e.date < w) before += e.amount;
+  let rem = bud - before;
+  if (ps > first && !(S.mode === 'auto' && S.refill)) rem += Math.min(0, periodInfo(prevP(ps)).left); // sans remboursement automatique : le négatif du mois précédent est reporté tel quel
+  return Math.round(rem * segLen(w) / dF) - weekBase(w);
 }
 /* ---------- Enveloppes : un plafond par catégorie, jamais au-dessus du budget ---------- */
 const envSum = (cats) => (cats || S.cats).reduce((t, c) => t + (c.budget || 0), 0);
@@ -456,10 +454,12 @@ function viewWeek() {
     '<div class="meta num"><span><strong>' + eur(inf.spent) + '</strong> dépensés</span><span>Budget <strong>' + eur(inf.base) + '</strong></span>' +
     (inf.carry ? '<span>' + (inf.carry > 0 ? 'Report <strong>+' : 'Report <strong>−') + eur(Math.abs(inf.carry)) + '</strong></span>' : '') + '</div></section>';
   let stats = '';
-  if (cur && inf.avail > 0) {
-    const ideal = inf.avail * elapsed / nseg, diff = Math.round(inf.spent - ideal);
-    stats = '<div class="grid2 stats"><div class="card"><div class="lbl2">Par jour</div><div class="v num">' + eur(days > 0 ? Math.max(0, inf.left) / days : 0) + '</div><div class="small muted">' + (days > 1 ? 'pour les ' + days + ' jours restants' : days === 1 ? 'pour aujourd\'hui' : '') + '</div></div>' +
-      '<div class="card"><div class="lbl2">Rythme</div><div class="v num ' + (diff <= 0 ? 'good' : 'badv') + '">' + (diff <= 0 ? '−' : '+') + eur(Math.abs(diff)) + '</div><div class="small muted">' + (diff <= 0 ? 'sous la trajectoire' : 'au-dessus de la trajectoire') + '</div></div></div>';
+  const mp = periodInfo(curP());
+  if (cur && mp.budget > 0) {
+    // Rythme du MOIS : c'est lui qui permet de finir à l'équilibre à la fin de la période de paie
+    const mel = diffDays(today(), mp.ps) + 1, mleft = mp.days - mel + 1, allow = mleft > 0 ? Math.max(0, mp.left) / mleft : 0, diff = Math.round(mp.spent - mp.budget * mel / mp.days);
+    stats = '<div class="grid2 stats"><div class="card"><div class="lbl2">Par jour</div><div class="v num">' + eur(allow) + '</div><div class="small muted">' + (mp.left <= 0 ? 'budget du mois épuisé' : 'jusqu\'au ' + fmtShort(mp.pe) + ' pour finir à l\'équilibre') + '</div></div>' +
+      '<div class="card"><div class="lbl2">Rythme du mois</div><div class="v num ' + (diff <= 0 ? 'good' : 'badv') + '">' + (diff <= 0 ? '−' : '+') + eur(Math.abs(diff)) + '</div><div class="small muted">' + (diff <= 0 ? 'sous la trajectoire du mois' : 'au-dessus de la trajectoire du mois') + '</div></div></div>';
   }
   const addBtn = '<button class="btn primary bigbtn" data-act="addExp" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Nouvelle dépense</button>';
   let reminder = '';
