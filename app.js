@@ -506,22 +506,38 @@ function paceInfo(ps) {
   return { el, left, pace, proj, eff, over: Math.max(0, proj - eff), cross, reliable: el >= 5, allowed: left > 0 ? Math.max(0, pi.left) / left : 0 };
 }
 function projectBalance(paceOv) {
-  if (S.acctBalance == null || !S.acctDate) return null;
-  const t = today(), ps = curP(), pe = pend(ps), pi = periodInfo(ps), el = diffDays(t, ps) + 1;
+  if (!S.setupDone) return null;
+  const t = today(), ps = curP(), pe = pend(ps), pi = periodInfo(ps), el = diffDays(t, ps) + 1, anchor = addDays(ps, -1);
   const pace = paceOv != null ? paceOv : el >= 5 ? pi.spent / el : Math.max(0, pi.budget) / pi.days, provM = PROV.filter((q) => q.mode !== 'month').reduce((a, q) => a + q.monthly, 0);
-  const horizon = pe > t ? pe : t, pts = []; let bal = S.acctBalance;
-  for (let d = addDays(S.acctDate, 1), n = 0; d <= horizon && n < 400; d = addDays(d, 1), n++) {
-    let delta = 0;
-    for (const r of REC) if (occurrences(r, d, d).length) delta -= r.amount;
-    for (const i of INC) if (i.date === d) delta += i.amount;
-    if (S.savingsDay && parse(d).getDate() === S.savingsDay) delta -= S.savings + provM;
-    if (d <= t) { for (const e of EXPB) if (e.date === d) delta -= e.amount; } else delta -= pace;
-    bal += delta; pts.push({ d, bal });
+  // flux d'un jour : revenus datés, charges fixes, virement d'épargne, dépenses réelles (jusqu'à aujourd'hui) ou au rythme prévu (après)
+  const flow = (d, actual) => {
+    let inc = 0, out = 0;
+    for (const r of REC) if (occurrences(r, d, d).length) out += r.amount;
+    for (const i of INC) if (i.date === d) inc += i.amount;
+    if (S.savingsDay && parse(d).getDate() === S.savingsDay) out += S.savings + provM;
+    if (actual) { for (const e of EXPB) if (e.date === d) out += e.amount; } else out += pace;
+    return { inc, out };
+  };
+  // Solde de départ : soit votre solde réel saisi dans ce mois (remonté de ce qui est déjà sorti), soit revenus du mois + résultat du mois précédent.
+  const real = S.acctBalance != null && !!S.acctDate && S.acctDate >= anchor;
+  const first = pstart(S.startDate || today()), prevLeft = ps > first ? periodInfo(prevP(ps)).left : 0;
+  let from, bal, start;
+  if (real) {
+    from = S.acctDate; bal = S.acctBalance;
+    let outPast = 0; for (let d = ps, n = 0; d <= from && n < 40; d = addDays(d, 1), n++) outPast += flow(d, true).out;
+    start = S.acctBalance + outPast;
+  } else {
+    const early = pi.inc.fallback ? pi.inc.total : pi.inc.lines.filter((i) => i.date < ps).reduce((a, i) => a + i.amount, 0);
+    from = anchor; bal = prevLeft + early; start = pi.inc.total + prevLeft;
   }
-  const upto = pts.filter((q) => q.d <= t), now = upto.length ? upto[upto.length - 1].bal : S.acctBalance;
+  const horizon = pe > t ? pe : t, pts = [];
+  for (let d = addDays(from, 1), n = 0; d <= horizon && n < 400; d = addDays(d, 1), n++) {
+    const f = flow(d, d <= t); bal += f.inc - f.out; pts.push({ d, bal });
+  }
+  const upto = pts.filter((q) => q.d <= t), now = upto.length ? upto[upto.length - 1].bal : bal;
   const fut = [{ d: t, bal: now }, ...pts.filter((q) => q.d > t)];
   let min = fut[0]; for (const q of fut) if (q.bal < min.bal) min = q;
-  return { fut, now, min, end: fut[fut.length - 1], pace, thr: S.alertBelow || 0, low: min.bal < (S.alertBelow || 0) };
+  return { fut, now, min, end: fut[fut.length - 1], pace, thr: S.alertBelow || 0, low: min.bal < (S.alertBelow || 0), start, real, prevLeft, inc: pi.inc.total };
 }
 /* Scénario « je respecte le budget restant » : les jours à venir se partagent ce qui reste du budget du mois. */
 function projectBalanceBudget() {
@@ -586,15 +602,15 @@ function balanceChart(b, b2) {
 }
 function balanceCard() {
   const b = projectBalance();
-  if (!b) return '<section class="card stack"><h2>Compte courant</h2><p class="muted small">Saisissez le solde de votre compte : l\'appli ajoute les revenus attendus, les charges fixes à leur date et les dépenses au rythme actuel, pour voir si le compte tient jusqu\'au prochain revenu.</p><div class="actions"><button class="btn primary" data-act="editBal">Saisir le solde</button></div></section>';
+  if (!b) return '';
   const pi = periodInfo(curP()), b2 = projectBalanceBudget(), two = !!b2 && Math.abs(b2.pace - b.pace) > Math.max(100, b.pace * .05);
   const scen = two ? '<div class="kpis"><div class="kpi"><div class="l">Au rythme actuel · ' + fmtShort(b.end.d) + '</div><div class="v num" style="color:var(--' + (b.end.bal < (S.alertBelow || 0) ? 'bad' : 'ink') + ')">' + eur(b.end.bal) + '</div><div class="small muted num">' + eur(b.pace) + ' par jour</div></div>' +
     '<div class="kpi"><div class="l">Si je respecte le budget · ' + fmtShort(b2.end.d) + '</div><div class="v num" style="color:var(--' + (b2.end.bal < (S.alertBelow || 0) ? 'bad' : 'ink') + ')">' + eur(b2.end.bal) + '</div><div class="small muted num">' + eur(b2.pace) + ' par jour</div></div></div>' : '';
   return '<section class="card stack"><div class="sect-title" style="margin:0"><h2>Prévision du compte</h2><button class="btn sm" data-act="editBal">Mettre à jour</button></div>' +
     (b.low ? '<div class="alert bad">' + (b.min.bal < 0 ? 'Le compte pourrait passer à <b>découvert</b>' : 'Le compte pourrait descendre sous <b>' + eur(b.thr) + '</b>') + ' vers le <b>' + fmtShort(b.min.d) + '</b> (point bas : ' + eur(b.min.bal) + ').</div>' : '') +
-    '<div class="kpis"><div class="kpi"><div class="l">Aujourd\'hui (estimé)</div><div class="v num">' + eur(b.now) + '</div></div><div class="kpi"><div class="l">Point bas · ' + fmtShort(b.min.d) + '</div><div class="v num" style="color:var(--' + (b.low ? 'bad' : 'ink') + ')">' + eur(b.min.bal) + '</div></div></div>' +
+    '<div class="kpis"><div class="kpi wide"><div class="l">Solde de départ · ' + fmtShort(curP()) + '</div><div class="v num">' + eur(b.start) + '</div><div class="small muted num">' + (b.real ? 'recalé sur votre solde du ' + fmtShort(S.acctDate) : 'revenus ' + eur(b.inc) + (b.prevLeft < 0 ? ' − ' : ' + ') + eur(Math.abs(b.prevLeft)) + (b.prevLeft < 0 ? ' (négatif du mois précédent)' : ' (reste du mois précédent)')) + '</div></div><div class="kpi"><div class="l">Aujourd\'hui (estimé)</div><div class="v num">' + eur(b.now) + '</div></div><div class="kpi"><div class="l">Point bas · ' + fmtShort(b.min.d) + '</div><div class="v num" style="color:var(--' + (b.low ? 'bad' : 'ink') + ')">' + eur(b.min.bal) + '</div></div></div>' +
     scen + balanceChart(b, two ? b2 : null) + (two ? '<p class="small muted">Trait plein : au rythme actuel. Trait pointillé : si les jours restants se partagent le budget du mois qui reste.</p>' : '') +
-    '<p class="small muted">Solde saisi le ' + fmtShort(S.acctDate) + ' Hypothèses : dépenses courantes à ' + eur(b.pace) + ' par jour, charges fixes à leur date, revenus saisis avec une date à venir' + (S.savingsDay ? ', virement d\'épargne le ' + S.savingsDay + '.' : '.') + (!S.savingsDay && (S.savings > 0 || PROV.length) ? ' Indiquez le jour de votre virement d\'épargne dans Réglages pour l\'inclure.' : '') + '</p></section>';
+    '<p class="small muted">' + (b.real ? 'Solde réel saisi le ' + fmtShort(S.acctDate) + '. ' : 'Solde de départ calculé automatiquement ; touchez « Mettre à jour » pour le recaler sur votre solde bancaire. ') + 'Hypothèses : dépenses courantes à ' + eur(b.pace) + ' par jour, charges fixes à leur date, revenus saisis avec une date à venir' + (S.savingsDay ? ', virement d\'épargne le ' + S.savingsDay + '.' : '.') + (!S.savingsDay && (S.savings > 0 || PROV.length) ? ' Indiquez le jour de votre virement d\'épargne dans Réglages pour l\'inclure.' : '') + '</p></section>';
 }
 function adviceCard() {
   const a = adviceList(); if (!a.length) return '';
