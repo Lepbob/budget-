@@ -66,3 +66,5 @@ Puis http://localhost:8080 (`localhost` est accepté comme contexte sécurisé).
 
 ## Mettre à jour l'appli
 Après modification des fichiers, changez `VERSION` dans `sw.js` (ex. `budget-v4`) pour forcer le rafraîchissement du cache hors ligne.
+
+- **Prévision du compte, deux scénarios :** « au rythme actuel » (votre dépense moyenne par jour continue) et « si je respecte le budget » (les jours restants se partagent le budget du mois qui reste, trait pointillé sur la courbe).

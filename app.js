@@ -490,10 +490,10 @@ function paceInfo(ps) {
   if (el >= 5 && pace > 0 && pi.spent <= eff && proj > eff) cross = addDays(ps, Math.min(pi.days - 1, Math.max(el - 1, Math.ceil(eff / pace) - 1)));
   return { el, left, pace, proj, eff, over: Math.max(0, proj - eff), cross, reliable: el >= 5, allowed: left > 0 ? Math.max(0, pi.left) / left : 0 };
 }
-function projectBalance() {
+function projectBalance(paceOv) {
   if (S.acctBalance == null || !S.acctDate) return null;
   const t = today(), ps = curP(), pe = pend(ps), pi = periodInfo(ps), el = diffDays(t, ps) + 1;
-  const pace = el >= 5 ? pi.spent / el : Math.max(0, pi.budget) / pi.days, provM = PROV.filter((q) => q.mode !== 'month').reduce((a, q) => a + q.monthly, 0);
+  const pace = paceOv != null ? paceOv : el >= 5 ? pi.spent / el : Math.max(0, pi.budget) / pi.days, provM = PROV.filter((q) => q.mode !== 'month').reduce((a, q) => a + q.monthly, 0);
   const horizon = pe > t ? pe : t, pts = []; let bal = S.acctBalance;
   for (let d = addDays(S.acctDate, 1), n = 0; d <= horizon && n < 400; d = addDays(d, 1), n++) {
     let delta = 0;
@@ -507,6 +507,12 @@ function projectBalance() {
   const fut = [{ d: t, bal: now }, ...pts.filter((q) => q.d > t)];
   let min = fut[0]; for (const q of fut) if (q.bal < min.bal) min = q;
   return { fut, now, min, end: fut[fut.length - 1], pace, thr: S.alertBelow || 0, low: min.bal < (S.alertBelow || 0) };
+}
+/* Scénario « je respecte le budget restant » : les jours à venir se partagent ce qui reste du budget du mois. */
+function projectBalanceBudget() {
+  const ps = curP(), pi = periodInfo(ps), left = pi.days - (diffDays(today(), ps) + 1);
+  const p = left > 0 ? Math.max(0, pi.left) / left : 0;
+  const b = projectBalance(p); if (b) b.pace = p; return b;
 }
 function adviceList() {
   const first = pstart(S.startDate || today()), closed = [];
@@ -548,15 +554,16 @@ function paceCard(ps) {
     brow('Dépense moyenne', eur(pc.pace) + ' par jour') + brow('Dépenses prévues en fin de mois', eur(pc.proj)) + brow(margin >= 0 ? 'Marge prévue' : 'Dépassement prévu', eur(Math.abs(margin)), 'total') +
     (pc.over > 0 ? '<p class="small" style="margin-top:10px">' + (pc.cross ? 'À ce rythme, le budget sera épuisé vers le <strong>' + fmtShort(pc.cross) + '</strong> ' : '') + (pi.left > 0 && pc.left > 0 ? 'Pour tenir jusqu\'au ' + fmtShort(pi.pe) + ' : <strong class="num">' + eur(pc.allowed) + '</strong> par jour au plus.' : '') + '</p>' : '<p class="small muted" style="margin-top:10px">Vous êtes dans les clous si le rythme se maintient.</p>') + '</section>';
 }
-function balanceChart(b) {
+function balanceChart(b, b2) {
   const L = b.fut; if (L.length < 2) return '';
   const W = 340, H = 150, Lm = 46, Rm = 10, T = 12, B = 22, iw = W - Lm - Rm, ih = H - T - B;
-  const vals = L.map((q) => q.bal).concat([0, b.thr]), lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
+  const vals = L.map((q) => q.bal).concat(b2 ? b2.fut.map((q) => q.bal) : [], [0, b.thr]), lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
   const x = (i) => Lm + (i / (L.length - 1)) * iw, y = (v) => T + ih - ((v - lo) / span) * ih;
   let g = '';
   [lo, (lo + hi) / 2, hi].forEach((v) => { g += '<line class="grid" x1="' + Lm + '" x2="' + (W - Rm) + '" y1="' + y(v).toFixed(1) + '" y2="' + y(v).toFixed(1) + '"/><text class="tick" x="' + (Lm - 6) + '" y="' + (y(v) + 3.5).toFixed(1) + '" text-anchor="end">' + new Intl.NumberFormat('fr-FR').format(Math.round(v / 100)) + ' €</text>'; });
   if (lo < 0 && hi > 0) g += '<line class="budget" x1="' + Lm + '" x2="' + (W - Rm) + '" y1="' + y(0).toFixed(1) + '" y2="' + y(0).toFixed(1) + '"/>';
   if (b.thr > 0) g += '<line class="thr" x1="' + Lm + '" x2="' + (W - Rm) + '" y1="' + y(b.thr).toFixed(1) + '" y2="' + y(b.thr).toFixed(1) + '"/>';
+  if (b2 && b2.fut.length === L.length) g += '<polyline class="bline bline2" points="' + b2.fut.map((q, i) => x(i).toFixed(1) + ',' + y(q.bal).toFixed(1)).join(' ') + '"/>';
   g += '<polyline class="bline" points="' + L.map((q, i) => x(i).toFixed(1) + ',' + y(q.bal).toFixed(1)).join(' ') + '"/>';
   const mi = L.indexOf(b.min); g += '<circle class="bdot ' + (b.low ? 'low' : '') + '" cx="' + x(mi).toFixed(1) + '" cy="' + y(b.min.bal).toFixed(1) + '" r="4.5"/>';
   g += '<text class="tick" x="' + Lm + '" y="' + (H - 6) + '">' + fmtShort(L[0].d) + '</text><text class="tick" x="' + (W - Rm) + '" y="' + (H - 6) + '" text-anchor="end">' + fmtShort(L[L.length - 1].d) + '</text>';
@@ -565,11 +572,13 @@ function balanceChart(b) {
 function balanceCard() {
   const b = projectBalance();
   if (!b) return '<section class="card stack"><h2>Compte courant</h2><p class="muted small">Saisissez le solde de votre compte : l\'appli ajoute les revenus attendus, les charges fixes à leur date et les dépenses au rythme actuel, pour voir si le compte tient jusqu\'au prochain revenu.</p><div class="actions"><button class="btn primary" data-act="editBal">Saisir le solde</button></div></section>';
-  const pi = periodInfo(curP());
+  const pi = periodInfo(curP()), b2 = projectBalanceBudget(), two = !!b2 && Math.abs(b2.pace - b.pace) > Math.max(100, b.pace * .05);
+  const scen = two ? '<div class="kpis"><div class="kpi"><div class="l">Au rythme actuel · ' + fmtShort(b.end.d) + '</div><div class="v num" style="color:var(--' + (b.end.bal < (S.alertBelow || 0) ? 'bad' : 'ink') + ')">' + eur(b.end.bal) + '</div><div class="small muted num">' + eur(b.pace) + ' par jour</div></div>' +
+    '<div class="kpi"><div class="l">Si je respecte le budget · ' + fmtShort(b2.end.d) + '</div><div class="v num" style="color:var(--' + (b2.end.bal < (S.alertBelow || 0) ? 'bad' : 'ink') + ')">' + eur(b2.end.bal) + '</div><div class="small muted num">' + eur(b2.pace) + ' par jour</div></div></div>' : '';
   return '<section class="card stack"><div class="sect-title" style="margin:0"><h2>Prévision du compte</h2><button class="btn sm" data-act="editBal">Mettre à jour</button></div>' +
     (b.low ? '<div class="alert bad">' + (b.min.bal < 0 ? 'Le compte pourrait passer à <b>découvert</b>' : 'Le compte pourrait descendre sous <b>' + eur(b.thr) + '</b>') + ' vers le <b>' + fmtShort(b.min.d) + '</b> (point bas : ' + eur(b.min.bal) + ').</div>' : '') +
     '<div class="kpis"><div class="kpi"><div class="l">Aujourd\'hui (estimé)</div><div class="v num">' + eur(b.now) + '</div></div><div class="kpi"><div class="l">Point bas · ' + fmtShort(b.min.d) + '</div><div class="v num" style="color:var(--' + (b.low ? 'bad' : 'ink') + ')">' + eur(b.min.bal) + '</div></div></div>' +
-    balanceChart(b) +
+    scen + balanceChart(b, two ? b2 : null) + (two ? '<p class="small muted">Trait plein : au rythme actuel. Trait pointillé : si les jours restants se partagent le budget du mois qui reste.</p>' : '') +
     '<p class="small muted">Solde saisi le ' + fmtShort(S.acctDate) + ' Hypothèses : dépenses courantes à ' + eur(b.pace) + ' par jour, charges fixes à leur date, revenus saisis avec une date à venir' + (S.savingsDay ? ', virement d\'épargne le ' + S.savingsDay + '.' : '.') + (!S.savingsDay && (S.savings > 0 || PROV.length) ? ' Indiquez le jour de votre virement d\'épargne dans Réglages pour l\'inclure.' : '') + '</p></section>';
 }
 function adviceCard() {

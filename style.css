@@ -433,3 +433,4 @@ nav.tabs .in { pointer-events: auto; background: var(--surface); border: 1px sol
 .hero .meta { color: var(--muted); }
 .jar .jpc, .jar .jtl { color: #2C3A34; } .jar .jtl i { color: #4C3F2A; }
 .jar .jpace { stroke: #2C3A34; }
+.chart .bline2 { stroke: var(--ok); stroke-width: 2.2; stroke-dasharray: 6 5; }
