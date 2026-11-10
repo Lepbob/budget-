@@ -530,11 +530,11 @@ function projectBalance(paceOv) {
     const early = pi.inc.fallback ? pi.inc.total : pi.inc.lines.filter((i) => i.date < ps).reduce((a, i) => a + i.amount, 0);
     from = anchor; bal = prevLeft + early; start = pi.inc.total + prevLeft;
   }
-  const horizon = pe > t ? pe : t, pts = [];
+  const bal0 = bal, horizon = pe > t ? pe : t, pts = [];
   for (let d = addDays(from, 1), n = 0; d <= horizon && n < 400; d = addDays(d, 1), n++) {
     const f = flow(d, d <= t); bal += f.inc - f.out; pts.push({ d, bal });
   }
-  const upto = pts.filter((q) => q.d <= t), now = upto.length ? upto[upto.length - 1].bal : bal;
+  const upto = pts.filter((q) => q.d <= t), now = upto.length ? upto[upto.length - 1].bal : bal0;
   const fut = [{ d: t, bal: now }, ...pts.filter((q) => q.d > t)];
   let min = fut[0]; for (const q of fut) if (q.bal < min.bal) min = q;
   return { fut, now, min, end: fut[fut.length - 1], pace, thr: S.alertBelow || 0, low: min.bal < (S.alertBelow || 0), start, real, prevLeft, inc: pi.inc.total };
