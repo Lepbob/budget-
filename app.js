@@ -15,7 +15,12 @@ const ymd = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.g
 const parse = (s) => { const p = s.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2], 12); };
 const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return ymd(d); };
 const today = () => ymd(new Date());
-const weekStartOf = (s, dow) => { const d = parse(s); d.setDate(d.getDate() - ((d.getDay() - dow + 7) % 7)); return ymd(d); };
+const mondayOf = (s, dow) => { const d = parse(s); d.setDate(d.getDate() - ((d.getDay() - dow + 7) % 7)); return ymd(d); };
+/* Une « semaine » est coupée aux bornes du mois de paie : début = le plus tardif du début de semaine et du début de période. */
+const weekStartOf = (s, dow) => { const m = mondayOf(s, dow), p = pstart(s); return m > p ? m : p; };
+const segEnd = (w) => { const e = addDays(mondayOf(w, S.weekStart), 6), pe = pend(pstart(w)); return e < pe ? e : pe; };
+const segLen = (w) => diffDays(segEnd(w), w) + 1;
+const nextSeg = (w) => addDays(segEnd(w), 1), prevSeg = (w) => weekStartOf(addDays(w, -1), S.weekStart);
 const diffDays = (a, b) => Math.round((parse(a) - parse(b)) / 864e5);
 const fmtDay = (s) => parse(s).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
 const fmtShort = (s) => parse(s).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
@@ -248,9 +253,12 @@ function periodInfo(ps) {
   const eff = Math.max(0, budget);
   return (X.pi[ps] = { ps, pe, days, inc, fixed, sav, refill, provM, free, budget, spent, cat, left: budget - spent, over: Math.max(0, spent - eff), ratio: eff > 0 ? spent / eff : (spent > 0 ? 2 : 0) });
 }
-function weekBase(w) { // budget d'une semaine = somme des budgets journaliers de ses 7 jours (une semaine peut chevaucher deux mois)
+function weekBase(w) { // budget d'un tronçon de semaine = part du budget du mois pour ses jours (les tronçons d'un mois totalisent exactement le budget du mois)
   X.wb = X.wb || {};
-  if (X.wb[w] == null) { let t = 0; for (let k = 0; k < 7; k++) { const pi = periodInfo(pstart(addDays(w, k))); t += Math.max(0, pi.budget) / pi.days; } X.wb[w] = Math.round(t); }
+  if (X.wb[w] == null) {
+    const ps = pstart(w), pi = periodInfo(ps), bud = Math.max(0, pi.budget), d0 = diffDays(w, ps), d1 = d0 + segLen(w);
+    X.wb[w] = Math.round(bud * d1 / pi.days) - Math.round(bud * d0 / pi.days);
+  }
   return X.wb[w];
 }
 function weekMap() {
@@ -266,13 +274,19 @@ function carryFor(w) {
   const start = weekStartOf(S.startDate || today(), S.weekStart);
   if (w <= start) return 0;
   let c = 0, i = 0;
-  // Un dépassement se reporte en entier ; un excédent est plafonné à un budget hebdo.
-  for (let k = start; k < w && i < 520; k = addDays(k, 7), i++) { const b = weekBase(k); c = Math.min(b, c + b - weekSpent(k)); }
+  // Dans un mois de paie : un dépassement se reporte en entier, un excédent est plafonné à un budget de tronçon.
+  // À la fin du mois : l'excédent est abandonné (il reste sur le compte) ; le négatif est repris par le « remboursement » du mois suivant
+  // (mode automatique) ou reporté tel quel (mode manuel / remboursement désactivé).
+  for (let k = start; k < w && i < 520; k = nextSeg(k), i++) {
+    const b = weekBase(k); c = Math.min(b, c + b - weekSpent(k));
+    if (nextSeg(k) > pend(pstart(k))) c = S.mode === 'auto' && S.refill ? 0 : Math.min(0, c);
+  }
   return c;
 }
 /* ---------- Enveloppes : un plafond par catégorie, jamais au-dessus du budget ---------- */
 const envSum = (cats) => (cats || S.cats).reduce((t, c) => t + (c.budget || 0), 0);
-const envCap = () => Math.max(0, weekBase(weekStartOf(today(), S.weekStart)));
+const envCap = () => { const pi = periodInfo(curP()); return Math.max(0, Math.round(Math.max(0, pi.budget) * 7 / pi.days)); };
+const catBud = (c, w) => Math.round((c.budget || 0) * segLen(w) / 7);
 function envAuto() {
   const cap = envCap(), since = addDays(today(), -56), w = {};
   for (const e of EXPB) if (e.date >= since && catById(e.cat)) w[e.cat] = (w[e.cat] || 0) + e.amount;
@@ -292,8 +306,8 @@ function alertsFor(w) {
   }
   for (const c of S.cats) {
     if (!c.budget) continue;
-    const r = weekCat(w, c.id) / c.budget;
-    if (r > 1) out.push({ lvl: 'bad', html: '<b>' + esc(c.name) + '</b> : budget dépassé de ' + eur(weekCat(w, c.id) - c.budget) + '.' });
+    const cb = catBud(c, w), r = cb ? weekCat(w, c.id) / cb : 0;
+    if (r > 1) out.push({ lvl: 'bad', html: '<b>' + esc(c.name) + '</b> : budget dépassé de ' + eur(weekCat(w, c.id) - cb) + '.' });
     else if (r >= 0.8) out.push({ lvl: 'warn', html: '<b>' + esc(c.name) + '</b> : ' + pct(r) + ' du budget consommé.' });
   }
   return out;
@@ -427,15 +441,15 @@ function jarHtml(inf, paceLeft) {
 function viewWeek() {
   const w = weekSel, cur = w === curWeek();
   const nav = '<div class="weeknav"><button class="icon-btn" data-act="wk" data-d="-7" aria-label="Semaine précédente"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>' +
-    '<div class="label">' + (cur ? 'Cette semaine' : fmtShort(w) + ' – ' + fmtShort(addDays(w, 6))) +
+    '<div class="label">' + (cur ? 'Cette semaine' : fmtShort(w) + ' – ' + fmtShort(segEnd(w))) +
     '<div class="small muted" style="font-family:var(--font-body);font-weight:500">' +
-    (cur ? fmtShort(w) + ' – ' + fmtShort(addDays(w, 6)) : '<button class="link" data-act="wkNow">Revenir à cette semaine</button>') + '</div></div>' +
+    (cur ? fmtShort(w) + ' – ' + fmtShort(segEnd(w)) : '<button class="link" data-act="wkNow">Revenir à cette semaine</button>') + (segLen(w) < 7 ? '<div class="small" style="font-family:var(--font-body);font-weight:700;color:var(--warn)">Semaine incomplète · ' + segLen(w) + ' jour' + (segLen(w) > 1 ? 's' : '') + ' dans ce mois</div>' : '') + '</div></div>' +
     '<button class="icon-btn" data-act="wk" data-d="7" aria-label="Semaine suivante"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>';
   if (!S.setupDone) return nav + onboarding();
   const inf = weekInfo(w);
   const stLong = { ok: 'Une semaine sereine', warn: 'On garde un œil dessus', bad: 'Budget dépassé' }[inf.st];
-  const days = cur ? 7 - diffDays(today(), w) : 0, elapsed = cur ? 8 - days : 7;
-  const hero = '<section class="card hero ' + inf.st + '">' + jarHtml(inf, cur ? inf.avail * (7 - elapsed) / 7 : null) +
+  const nseg = segLen(w), elapsed = cur ? diffDays(today(), w) + 1 : nseg, days = cur ? nseg - elapsed + 1 : 0;
+  const hero = '<section class="card hero ' + inf.st + '">' + jarHtml(inf, cur ? inf.avail * (nseg - elapsed) / nseg : null) +
     '<div class="big num">' + (inf.left < 0 ? '− ' : '') + eur(Math.abs(inf.left)) + '</div><div class="jtitle">' + (inf.left < 0 ? 'de dépassement' : 'restants') + '</div>' +
     '<div class="lbl">' + (inf.avail > 0 ? 'sur ' + eur(inf.avail) + ' cette semaine' : 'aucun budget cette semaine') + '</div>' +
     '<div class="stline"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ST_ICON[inf.st] + '"/></svg>' + stLong + '</div>' +
@@ -443,7 +457,7 @@ function viewWeek() {
     (inf.carry ? '<span>' + (inf.carry > 0 ? 'Report <strong>+' : 'Report <strong>−') + eur(Math.abs(inf.carry)) + '</strong></span>' : '') + '</div></section>';
   let stats = '';
   if (cur && inf.avail > 0) {
-    const ideal = inf.avail * elapsed / 7, diff = Math.round(inf.spent - ideal);
+    const ideal = inf.avail * elapsed / nseg, diff = Math.round(inf.spent - ideal);
     stats = '<div class="grid2 stats"><div class="card"><div class="lbl2">Par jour</div><div class="v num">' + eur(days > 0 ? Math.max(0, inf.left) / days : 0) + '</div><div class="small muted">' + (days > 1 ? 'pour les ' + days + ' jours restants' : days === 1 ? 'pour aujourd\'hui' : '') + '</div></div>' +
       '<div class="card"><div class="lbl2">Rythme</div><div class="v num ' + (diff <= 0 ? 'good' : 'badv') + '">' + (diff <= 0 ? '−' : '+') + eur(Math.abs(diff)) + '</div><div class="small muted">' + (diff <= 0 ? 'sous la trajectoire' : 'au-dessus de la trajectoire') + '</div></div></div>';
   }
@@ -453,7 +467,8 @@ function viewWeek() {
   if (cur && !hasToday && new Date().getHours() >= 18) reminder = '<div class="alert info">Aucune dépense saisie aujourd\'hui. Ajoutez-les maintenant, ou passez si vous n\'avez rien dépensé.</div>';
   const envWarn = envSum() > envCap() ? '<div class="alert bad">Vos enveloppes (' + eur(envSum()) + ') dépassent le budget de la semaine (' + eur(envCap()) + '). <button class="link" data-act="envFit">Réduire proportionnellement</button></div>' : '';
   const al = envWarn + alertsFor(w).map((a) => '<div class="alert ' + (a.lvl === 'bad' ? 'bad' : '') + '">' + a.html + '</div>').join('');
-  const rows = S.cats.filter((c) => c.budget || weekCat(w, c.id)).concat(
+  const cbs = {}; S.cats.forEach((c) => { cbs[c.id] = catBud(c, w); });
+  const rows = S.cats.filter((c) => c.budget || weekCat(w, c.id)).map((c) => ({ ...c, budget: cbs[c.id] })).concat(
     EXPB.some((e) => !catById(e.cat) && weekStartOf(e.date, S.weekStart) === w) ? [{ id: '__x', name: 'Catégorie supprimée', budget: 0 }] : []);
   let cats = '';
   if (rows.length) {
@@ -615,8 +630,8 @@ function onboarding() {
 /* --- Mois --- */
 function niceMax(v) { const e = Math.pow(10, Math.floor(Math.log10(v))), m = v / e; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * e; }
 function weeksChart() {
-  const cw = curWeek(), n = 8, rows = [];
-  for (let i = n - 1; i >= 0; i--) { const w = addDays(cw, -7 * i); rows.push({ w, s: weekSpent(w), b: weekBase(w) }); }
+  const n = 8, rows = []; let w = curWeek();
+  for (let i = 0; i < n; i++) { rows.unshift({ w, s: weekSpent(w), b: weekBase(w) }); w = prevSeg(w); }
   const max = niceMax(Math.max(...rows.map((r) => r.b), ...rows.map((r) => r.s), 1000) * 1.05);
   const W = 340, H = 180, L = 44, R = 8, T = 10, B = 26, iw = W - L - R, ih = H - T - B, bw = iw / n;
   const y = (v) => T + ih - (v / max) * ih;
@@ -873,7 +888,7 @@ function viewSettings() {
     '<section class="card stack"><h2>Budget hebdomadaire</h2>' +
     '<label class="f">Calcul<select data-set="mode"><option value="auto"' + (S.mode === 'auto' ? ' selected' : '') + '>Automatique (revenus − charges − épargne)</option><option value="manual"' + (S.mode === 'manual' ? ' selected' : '') + '>Je fixe le montant</option></select></label>' +
     (S.mode === 'manual' ? '<label class="f">Budget par semaine<input data-money="manual" inputmode="decimal" value="' + (S.manual ? toInput(S.manual) : '') + '" placeholder="0"></label>' : '') +
-    '<div class="small muted num">Budget actuel : <strong style="color:var(--ink)">' + eur(weekBase(curWeek())) + '</strong> par semaine</div>' +
+    '<div class="small muted num">Budget actuel : <strong style="color:var(--ink)">' + eur(envCap()) + '</strong> par semaine complète</div>' +
     '<label class="f">La semaine commence le<select data-set="weekStart">' + [1, 2, 3, 4, 5, 6, 0].map((d) => '<option value="' + d + '"' + (S.weekStart === d ? ' selected' : '') + '>' + DAYS[d] + '</option>').join('') + '</select></label>' +
     '<label class="f">Le mois commence le<select data-set="monthStart">' + Array.from({ length: 28 }, (_, i) => i + 1).map((d) => '<option value="' + d + '"' + (S.monthStart === d ? ' selected' : '') + '>' + d + '</option>').join('') + '</select></label>' +
     '<label class="sw"><span><strong>Réserver le remboursement de l\'épargne de secours</strong><div class="small muted">Le dépassement d\'un mois est retenu sur le budget du mois suivant.</div></span><input type="checkbox" data-set="refill"' + (S.refill ? ' checked' : '') + '></label>' +
@@ -1069,8 +1084,9 @@ document.addEventListener('submit', async (ev) => {
       if (wantFav && !FAV.some((x) => x.note === doc.note && x.amount === amount && x.cat === doc.cat)) await write(() => store.set('f_' + uid(), { t: 'f', note: doc.note, amount, cat: doc.cat, ts: Date.now() }));
       const cnt = doc.prov ? 0 : amount, c = catById(doc.cat), ca = beforeCat - oldSameCat + cnt, ta = beforeAll - wasInWeek + cnt, inf = weekInfo(w);
       let msg = 'Enregistré';
-      if (c && c.budget && ca / c.budget >= 1) msg = c.name + ' : budget dépassé';
-      else if (c && c.budget && ca / c.budget >= 0.8) msg = c.name + ' à ' + pct(ca / c.budget);
+      const cbw = c ? catBud(c, w) : 0;
+      if (c && cbw && ca / cbw >= 1) msg = c.name + ' : budget dépassé';
+      else if (c && cbw && ca / cbw >= 0.8) msg = c.name + ' à ' + pct(ca / cbw);
       else if (inf.avail > 0 && ta / inf.avail >= 1) msg = 'Budget de la semaine dépassé';
       else if (inf.avail > 0 && ta / inf.avail >= 0.8) msg = 'Budget de la semaine à ' + pct(ta / inf.avail);
       toast(msg, old ? () => store.set(id, old) : () => store.del(id));
@@ -1196,7 +1212,7 @@ document.addEventListener('click', async (ev) => {
       if (el.dataset.armed) { await removePin(); toast('Code désactivé'); render(); } else { el.dataset.armed = '1'; el.textContent = 'Confirmer la désactivation'; }
       break;
     case 'tab': tab = el.dataset.tab; render(); window.scrollTo(0, 0); break;
-    case 'wk': weekSel = addDays(weekSel, +el.dataset.d); render(); break;
+    case 'wk': weekSel = +el.dataset.d < 0 ? prevSeg(weekSel) : nextSeg(weekSel); render(); break;
     case 'wkNow': weekSel = curWeek(); render(); break;
     case 'addExp': expenseSheet(); break;
     case 'editExp': { const sw = el.closest('.swr'); if (sw && sw.classList.contains('open')) { sw.classList.remove('open'); el.style.transform = ''; break; } expenseSheet(DOCS[id]); break; }

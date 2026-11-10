@@ -68,3 +68,5 @@ Puis http://localhost:8080 (`localhost` est accepté comme contexte sécurisé).
 Après modification des fichiers, changez `VERSION` dans `sw.js` (ex. `budget-v4`) pour forcer le rafraîchissement du cache hors ligne.
 
 - **Prévision du compte, deux scénarios :** « au rythme actuel » (votre dépense moyenne par jour continue) et « si je respecte le budget » (les jours restants se partagent le budget du mois qui reste, trait pointillé sur la courbe).
+
+- **Semaines coupées au mois de paie :** une semaine ne chevauche plus deux mois. Si le mois commence ou finit en milieu de semaine, cette semaine est « incomplète » (ex. 5 → 8 nov. = 4 jours) et son budget est ajusté au prorata des jours (les tronçons totalisent exactement le budget du mois). Un dépassement se reporte d'une semaine à l'autre dans le mois ; à la fin du mois, le négatif est repris par le remboursement du mois suivant (ou reporté tel quel en mode manuel / sans remboursement) et l'excédent n'est pas reporté. Les enveloppes par catégorie sont ajustées pour une semaine incomplète.
