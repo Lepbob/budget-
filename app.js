@@ -15,12 +15,7 @@ const ymd = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.g
 const parse = (s) => { const p = s.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2], 12); };
 const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return ymd(d); };
 const today = () => ymd(new Date());
-const mondayOf = (s, dow) => { const d = parse(s); d.setDate(d.getDate() - ((d.getDay() - dow + 7) % 7)); return ymd(d); };
-/* Une « semaine » est coupée aux bornes du mois de paie : début = le plus tardif du début de semaine et du début de période. */
-const weekStartOf = (s, dow) => { const m = mondayOf(s, dow), p = pstart(s); return m > p ? m : p; };
-const segEnd = (w) => { const e = addDays(mondayOf(w, S.weekStart), 6), pe = pend(pstart(w)); return e < pe ? e : pe; };
-const segLen = (w) => diffDays(segEnd(w), w) + 1;
-const nextSeg = (w) => addDays(segEnd(w), 1), prevSeg = (w) => weekStartOf(addDays(w, -1), S.weekStart);
+const weekStartOf = (s, dow) => { const d = parse(s); d.setDate(d.getDate() - ((d.getDay() - dow + 7) % 7)); return ymd(d); };
 const diffDays = (a, b) => Math.round((parse(a) - parse(b)) / 864e5);
 const fmtDay = (s) => parse(s).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
 const fmtShort = (s) => parse(s).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
@@ -253,12 +248,9 @@ function periodInfo(ps) {
   const eff = Math.max(0, budget);
   return (X.pi[ps] = { ps, pe, days, inc, fixed, sav, refill, provM, free, budget, spent, cat, left: budget - spent, over: Math.max(0, spent - eff), ratio: eff > 0 ? spent / eff : (spent > 0 ? 2 : 0) });
 }
-function weekBase(w) { // budget d'un tronçon de semaine = part du budget du mois pour ses jours (les tronçons d'un mois totalisent exactement le budget du mois)
+function weekBase(w) { // budget d'une semaine = somme des budgets journaliers de ses 7 jours (une semaine peut chevaucher deux mois)
   X.wb = X.wb || {};
-  if (X.wb[w] == null) {
-    const ps = pstart(w), pi = periodInfo(ps), bud = Math.max(0, pi.budget), d0 = diffDays(w, ps), d1 = d0 + segLen(w);
-    X.wb[w] = Math.round(bud * d1 / pi.days) - Math.round(bud * d0 / pi.days);
-  }
+  if (X.wb[w] == null) { let t = 0; for (let k = 0; k < 7; k++) { const pi = periodInfo(pstart(addDays(w, k))); t += Math.max(0, pi.budget) / pi.days; } X.wb[w] = Math.round(t); }
   return X.wb[w];
 }
 function weekMap() {
@@ -274,19 +266,13 @@ function carryFor(w) {
   const start = weekStartOf(S.startDate || today(), S.weekStart);
   if (w <= start) return 0;
   let c = 0, i = 0;
-  // Dans un mois de paie : un dépassement se reporte en entier, un excédent est plafonné à un budget de tronçon.
-  // À la fin du mois : l'excédent est abandonné (il reste sur le compte) ; le négatif est repris par le « remboursement » du mois suivant
-  // (mode automatique) ou reporté tel quel (mode manuel / remboursement désactivé).
-  for (let k = start; k < w && i < 520; k = nextSeg(k), i++) {
-    const b = weekBase(k); c = Math.min(b, c + b - weekSpent(k));
-    if (nextSeg(k) > pend(pstart(k))) c = S.mode === 'auto' && S.refill ? 0 : Math.min(0, c);
-  }
+  // Un dépassement se reporte en entier ; un excédent est plafonné à un budget hebdo.
+  for (let k = start; k < w && i < 520; k = addDays(k, 7), i++) { const b = weekBase(k); c = Math.min(b, c + b - weekSpent(k)); }
   return c;
 }
 /* ---------- Enveloppes : un plafond par catégorie, jamais au-dessus du budget ---------- */
 const envSum = (cats) => (cats || S.cats).reduce((t, c) => t + (c.budget || 0), 0);
-const envCap = () => { const pi = periodInfo(curP()); return Math.max(0, Math.round(Math.max(0, pi.budget) * 7 / pi.days)); };
-const catBud = (c, w) => Math.round((c.budget || 0) * segLen(w) / 7);
+const envCap = () => Math.max(0, weekBase(weekStartOf(today(), S.weekStart)));
 function envAuto() {
   const cap = envCap(), since = addDays(today(), -56), w = {};
   for (const e of EXPB) if (e.date >= since && catById(e.cat)) w[e.cat] = (w[e.cat] || 0) + e.amount;
@@ -306,8 +292,8 @@ function alertsFor(w) {
   }
   for (const c of S.cats) {
     if (!c.budget) continue;
-    const cb = catBud(c, w), r = cb ? weekCat(w, c.id) / cb : 0;
-    if (r > 1) out.push({ lvl: 'bad', html: '<b>' + esc(c.name) + '</b> : budget dépassé de ' + eur(weekCat(w, c.id) - cb) + '.' });
+    const r = weekCat(w, c.id) / c.budget;
+    if (r > 1) out.push({ lvl: 'bad', html: '<b>' + esc(c.name) + '</b> : budget dépassé de ' + eur(weekCat(w, c.id) - c.budget) + '.' });
     else if (r >= 0.8) out.push({ lvl: 'warn', html: '<b>' + esc(c.name) + '</b> : ' + pct(r) + ' du budget consommé.' });
   }
   return out;
@@ -441,15 +427,15 @@ function jarHtml(inf, paceLeft) {
 function viewWeek() {
   const w = weekSel, cur = w === curWeek();
   const nav = '<div class="weeknav"><button class="icon-btn" data-act="wk" data-d="-7" aria-label="Semaine précédente"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>' +
-    '<div class="label">' + (cur ? 'Cette semaine' : fmtShort(w) + ' – ' + fmtShort(segEnd(w))) +
+    '<div class="label">' + (cur ? 'Cette semaine' : fmtShort(w) + ' – ' + fmtShort(addDays(w, 6))) +
     '<div class="small muted" style="font-family:var(--font-body);font-weight:500">' +
-    (cur ? fmtShort(w) + ' – ' + fmtShort(segEnd(w)) : '<button class="link" data-act="wkNow">Revenir à cette semaine</button>') + (segLen(w) < 7 ? '<div class="small" style="font-family:var(--font-body);font-weight:700;color:var(--warn)">Semaine incomplète · ' + segLen(w) + ' jour' + (segLen(w) > 1 ? 's' : '') + ' dans ce mois</div>' : '') + '</div></div>' +
+    (cur ? fmtShort(w) + ' – ' + fmtShort(addDays(w, 6)) : '<button class="link" data-act="wkNow">Revenir à cette semaine</button>') + '</div></div>' +
     '<button class="icon-btn" data-act="wk" data-d="7" aria-label="Semaine suivante"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>';
   if (!S.setupDone) return nav + onboarding();
   const inf = weekInfo(w);
   const stLong = { ok: 'Une semaine sereine', warn: 'On garde un œil dessus', bad: 'Budget dépassé' }[inf.st];
-  const nseg = segLen(w), elapsed = cur ? diffDays(today(), w) + 1 : nseg, days = cur ? nseg - elapsed + 1 : 0;
-  const hero = '<section class="card hero ' + inf.st + '">' + jarHtml(inf, cur ? inf.avail * (nseg - elapsed) / nseg : null) +
+  const days = cur ? 7 - diffDays(today(), w) : 0, elapsed = cur ? 8 - days : 7;
+  const hero = '<section class="card hero ' + inf.st + '">' + jarHtml(inf, cur ? inf.avail * (7 - elapsed) / 7 : null) +
     '<div class="big num">' + (inf.left < 0 ? '− ' : '') + eur(Math.abs(inf.left)) + '</div><div class="jtitle">' + (inf.left < 0 ? 'de dépassement' : 'restants') + '</div>' +
     '<div class="lbl">' + (inf.avail > 0 ? 'sur ' + eur(inf.avail) + ' cette semaine' : 'aucun budget cette semaine') + '</div>' +
     '<div class="stline"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ST_ICON[inf.st] + '"/></svg>' + stLong + '</div>' +
@@ -457,7 +443,7 @@ function viewWeek() {
     (inf.carry ? '<span>' + (inf.carry > 0 ? 'Report <strong>+' : 'Report <strong>−') + eur(Math.abs(inf.carry)) + '</strong></span>' : '') + '</div></section>';
   let stats = '';
   if (cur && inf.avail > 0) {
-    const ideal = inf.avail * elapsed / nseg, diff = Math.round(inf.spent - ideal);
+    const ideal = inf.avail * elapsed / 7, diff = Math.round(inf.spent - ideal);
     stats = '<div class="grid2 stats"><div class="card"><div class="lbl2">Par jour</div><div class="v num">' + eur(days > 0 ? Math.max(0, inf.left) / days : 0) + '</div><div class="small muted">' + (days > 1 ? 'pour les ' + days + ' jours restants' : days === 1 ? 'pour aujourd\'hui' : '') + '</div></div>' +
       '<div class="card"><div class="lbl2">Rythme</div><div class="v num ' + (diff <= 0 ? 'good' : 'badv') + '">' + (diff <= 0 ? '−' : '+') + eur(Math.abs(diff)) + '</div><div class="small muted">' + (diff <= 0 ? 'sous la trajectoire' : 'au-dessus de la trajectoire') + '</div></div></div>';
   }
@@ -467,8 +453,7 @@ function viewWeek() {
   if (cur && !hasToday && new Date().getHours() >= 18) reminder = '<div class="alert info">Aucune dépense saisie aujourd\'hui. Ajoutez-les maintenant, ou passez si vous n\'avez rien dépensé.</div>';
   const envWarn = envSum() > envCap() ? '<div class="alert bad">Vos enveloppes (' + eur(envSum()) + ') dépassent le budget de la semaine (' + eur(envCap()) + '). <button class="link" data-act="envFit">Réduire proportionnellement</button></div>' : '';
   const al = envWarn + alertsFor(w).map((a) => '<div class="alert ' + (a.lvl === 'bad' ? 'bad' : '') + '">' + a.html + '</div>').join('');
-  const cbs = {}; S.cats.forEach((c) => { cbs[c.id] = catBud(c, w); });
-  const rows = S.cats.filter((c) => c.budget || weekCat(w, c.id)).map((c) => ({ ...c, budget: cbs[c.id] })).concat(
+  const rows = S.cats.filter((c) => c.budget || weekCat(w, c.id)).concat(
     EXPB.some((e) => !catById(e.cat) && weekStartOf(e.date, S.weekStart) === w) ? [{ id: '__x', name: 'Catégorie supprimée', budget: 0 }] : []);
   let cats = '';
   if (rows.length) {
@@ -505,45 +490,23 @@ function paceInfo(ps) {
   if (el >= 5 && pace > 0 && pi.spent <= eff && proj > eff) cross = addDays(ps, Math.min(pi.days - 1, Math.max(el - 1, Math.ceil(eff / pace) - 1)));
   return { el, left, pace, proj, eff, over: Math.max(0, proj - eff), cross, reliable: el >= 5, allowed: left > 0 ? Math.max(0, pi.left) / left : 0 };
 }
-function projectBalance(paceOv) {
-  if (!S.setupDone) return null;
-  const t = today(), ps = curP(), pe = pend(ps), pi = periodInfo(ps), el = diffDays(t, ps) + 1, anchor = addDays(ps, -1);
-  const pace = paceOv != null ? paceOv : el >= 5 ? pi.spent / el : Math.max(0, pi.budget) / pi.days, provM = PROV.filter((q) => q.mode !== 'month').reduce((a, q) => a + q.monthly, 0);
-  // flux d'un jour : revenus datés, charges fixes, virement d'épargne, dépenses réelles (jusqu'à aujourd'hui) ou au rythme prévu (après)
-  const flow = (d, actual) => {
-    let inc = 0, out = 0;
-    for (const r of REC) if (occurrences(r, d, d).length) out += r.amount;
-    for (const i of INC) if (i.date === d) inc += i.amount;
-    if (S.savingsDay && parse(d).getDate() === S.savingsDay) out += S.savings + provM;
-    if (actual) { for (const e of EXPB) if (e.date === d) out += e.amount; } else out += pace;
-    return { inc, out };
-  };
-  // Solde de départ : soit votre solde réel saisi dans ce mois (remonté de ce qui est déjà sorti), soit revenus du mois + résultat du mois précédent.
-  const real = S.acctBalance != null && !!S.acctDate && S.acctDate >= anchor;
-  const first = pstart(S.startDate || today()), prevLeft = ps > first ? periodInfo(prevP(ps)).left : 0;
-  let from, bal, start;
-  if (real) {
-    from = S.acctDate; bal = S.acctBalance;
-    let outPast = 0; for (let d = ps, n = 0; d <= from && n < 40; d = addDays(d, 1), n++) outPast += flow(d, true).out;
-    start = S.acctBalance + outPast;
-  } else {
-    const early = pi.inc.fallback ? pi.inc.total : pi.inc.lines.filter((i) => i.date < ps).reduce((a, i) => a + i.amount, 0);
-    from = anchor; bal = prevLeft + early; start = pi.inc.total + prevLeft;
+function projectBalance() {
+  if (S.acctBalance == null || !S.acctDate) return null;
+  const t = today(), ps = curP(), pe = pend(ps), pi = periodInfo(ps), el = diffDays(t, ps) + 1;
+  const pace = el >= 5 ? pi.spent / el : Math.max(0, pi.budget) / pi.days, provM = PROV.filter((q) => q.mode !== 'month').reduce((a, q) => a + q.monthly, 0);
+  const horizon = pe > t ? pe : t, pts = []; let bal = S.acctBalance;
+  for (let d = addDays(S.acctDate, 1), n = 0; d <= horizon && n < 400; d = addDays(d, 1), n++) {
+    let delta = 0;
+    for (const r of REC) if (occurrences(r, d, d).length) delta -= r.amount;
+    for (const i of INC) if (i.date === d) delta += i.amount;
+    if (S.savingsDay && parse(d).getDate() === S.savingsDay) delta -= S.savings + provM;
+    if (d <= t) { for (const e of EXPB) if (e.date === d) delta -= e.amount; } else delta -= pace;
+    bal += delta; pts.push({ d, bal });
   }
-  const bal0 = bal, horizon = pe > t ? pe : t, pts = [];
-  for (let d = addDays(from, 1), n = 0; d <= horizon && n < 400; d = addDays(d, 1), n++) {
-    const f = flow(d, d <= t); bal += f.inc - f.out; pts.push({ d, bal });
-  }
-  const upto = pts.filter((q) => q.d <= t), now = upto.length ? upto[upto.length - 1].bal : bal0;
+  const upto = pts.filter((q) => q.d <= t), now = upto.length ? upto[upto.length - 1].bal : S.acctBalance;
   const fut = [{ d: t, bal: now }, ...pts.filter((q) => q.d > t)];
   let min = fut[0]; for (const q of fut) if (q.bal < min.bal) min = q;
-  return { fut, now, min, end: fut[fut.length - 1], pace, thr: S.alertBelow || 0, low: min.bal < (S.alertBelow || 0), start, real, prevLeft, inc: pi.inc.total };
-}
-/* Scénario « je respecte le budget restant » : les jours à venir se partagent ce qui reste du budget du mois. */
-function projectBalanceBudget() {
-  const ps = curP(), pi = periodInfo(ps), left = pi.days - (diffDays(today(), ps) + 1);
-  const p = left > 0 ? Math.max(0, pi.left) / left : 0;
-  const b = projectBalance(p); if (b) b.pace = p; return b;
+  return { fut, now, min, end: fut[fut.length - 1], pace, thr: S.alertBelow || 0, low: min.bal < (S.alertBelow || 0) };
 }
 function adviceList() {
   const first = pstart(S.startDate || today()), closed = [];
@@ -585,16 +548,15 @@ function paceCard(ps) {
     brow('Dépense moyenne', eur(pc.pace) + ' par jour') + brow('Dépenses prévues en fin de mois', eur(pc.proj)) + brow(margin >= 0 ? 'Marge prévue' : 'Dépassement prévu', eur(Math.abs(margin)), 'total') +
     (pc.over > 0 ? '<p class="small" style="margin-top:10px">' + (pc.cross ? 'À ce rythme, le budget sera épuisé vers le <strong>' + fmtShort(pc.cross) + '</strong> ' : '') + (pi.left > 0 && pc.left > 0 ? 'Pour tenir jusqu\'au ' + fmtShort(pi.pe) + ' : <strong class="num">' + eur(pc.allowed) + '</strong> par jour au plus.' : '') + '</p>' : '<p class="small muted" style="margin-top:10px">Vous êtes dans les clous si le rythme se maintient.</p>') + '</section>';
 }
-function balanceChart(b, b2) {
+function balanceChart(b) {
   const L = b.fut; if (L.length < 2) return '';
   const W = 340, H = 150, Lm = 46, Rm = 10, T = 12, B = 22, iw = W - Lm - Rm, ih = H - T - B;
-  const vals = L.map((q) => q.bal).concat(b2 ? b2.fut.map((q) => q.bal) : [], [0, b.thr]), lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
+  const vals = L.map((q) => q.bal).concat([0, b.thr]), lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
   const x = (i) => Lm + (i / (L.length - 1)) * iw, y = (v) => T + ih - ((v - lo) / span) * ih;
   let g = '';
   [lo, (lo + hi) / 2, hi].forEach((v) => { g += '<line class="grid" x1="' + Lm + '" x2="' + (W - Rm) + '" y1="' + y(v).toFixed(1) + '" y2="' + y(v).toFixed(1) + '"/><text class="tick" x="' + (Lm - 6) + '" y="' + (y(v) + 3.5).toFixed(1) + '" text-anchor="end">' + new Intl.NumberFormat('fr-FR').format(Math.round(v / 100)) + ' €</text>'; });
   if (lo < 0 && hi > 0) g += '<line class="budget" x1="' + Lm + '" x2="' + (W - Rm) + '" y1="' + y(0).toFixed(1) + '" y2="' + y(0).toFixed(1) + '"/>';
   if (b.thr > 0) g += '<line class="thr" x1="' + Lm + '" x2="' + (W - Rm) + '" y1="' + y(b.thr).toFixed(1) + '" y2="' + y(b.thr).toFixed(1) + '"/>';
-  if (b2 && b2.fut.length === L.length) g += '<polyline class="bline bline2" points="' + b2.fut.map((q, i) => x(i).toFixed(1) + ',' + y(q.bal).toFixed(1)).join(' ') + '"/>';
   g += '<polyline class="bline" points="' + L.map((q, i) => x(i).toFixed(1) + ',' + y(q.bal).toFixed(1)).join(' ') + '"/>';
   const mi = L.indexOf(b.min); g += '<circle class="bdot ' + (b.low ? 'low' : '') + '" cx="' + x(mi).toFixed(1) + '" cy="' + y(b.min.bal).toFixed(1) + '" r="4.5"/>';
   g += '<text class="tick" x="' + Lm + '" y="' + (H - 6) + '">' + fmtShort(L[0].d) + '</text><text class="tick" x="' + (W - Rm) + '" y="' + (H - 6) + '" text-anchor="end">' + fmtShort(L[L.length - 1].d) + '</text>';
@@ -602,15 +564,13 @@ function balanceChart(b, b2) {
 }
 function balanceCard() {
   const b = projectBalance();
-  if (!b) return '';
-  const pi = periodInfo(curP()), b2 = projectBalanceBudget(), two = !!b2 && Math.abs(b2.pace - b.pace) > Math.max(100, b.pace * .05);
-  const scen = two ? '<div class="kpis"><div class="kpi"><div class="l">Au rythme actuel · ' + fmtShort(b.end.d) + '</div><div class="v num" style="color:var(--' + (b.end.bal < (S.alertBelow || 0) ? 'bad' : 'ink') + ')">' + eur(b.end.bal) + '</div><div class="small muted num">' + eur(b.pace) + ' par jour</div></div>' +
-    '<div class="kpi"><div class="l">Si je respecte le budget · ' + fmtShort(b2.end.d) + '</div><div class="v num" style="color:var(--' + (b2.end.bal < (S.alertBelow || 0) ? 'bad' : 'ink') + ')">' + eur(b2.end.bal) + '</div><div class="small muted num">' + eur(b2.pace) + ' par jour</div></div></div>' : '';
+  if (!b) return '<section class="card stack"><h2>Compte courant</h2><p class="muted small">Saisissez le solde de votre compte : l\'appli ajoute les revenus attendus, les charges fixes à leur date et les dépenses au rythme actuel, pour voir si le compte tient jusqu\'au prochain revenu.</p><div class="actions"><button class="btn primary" data-act="editBal">Saisir le solde</button></div></section>';
+  const pi = periodInfo(curP());
   return '<section class="card stack"><div class="sect-title" style="margin:0"><h2>Prévision du compte</h2><button class="btn sm" data-act="editBal">Mettre à jour</button></div>' +
     (b.low ? '<div class="alert bad">' + (b.min.bal < 0 ? 'Le compte pourrait passer à <b>découvert</b>' : 'Le compte pourrait descendre sous <b>' + eur(b.thr) + '</b>') + ' vers le <b>' + fmtShort(b.min.d) + '</b> (point bas : ' + eur(b.min.bal) + ').</div>' : '') +
-    '<div class="kpis"><div class="kpi wide"><div class="l">Solde de départ · ' + fmtShort(curP()) + '</div><div class="v num">' + eur(b.start) + '</div><div class="small muted num">' + (b.real ? 'recalé sur votre solde du ' + fmtShort(S.acctDate) : 'revenus ' + eur(b.inc) + (b.prevLeft < 0 ? ' − ' : ' + ') + eur(Math.abs(b.prevLeft)) + (b.prevLeft < 0 ? ' (négatif du mois précédent)' : ' (reste du mois précédent)')) + '</div></div><div class="kpi"><div class="l">Aujourd\'hui (estimé)</div><div class="v num">' + eur(b.now) + '</div></div><div class="kpi"><div class="l">Point bas · ' + fmtShort(b.min.d) + '</div><div class="v num" style="color:var(--' + (b.low ? 'bad' : 'ink') + ')">' + eur(b.min.bal) + '</div></div></div>' +
-    scen + balanceChart(b, two ? b2 : null) + (two ? '<p class="small muted">Trait plein : au rythme actuel. Trait pointillé : si les jours restants se partagent le budget du mois qui reste.</p>' : '') +
-    '<p class="small muted">' + (b.real ? 'Solde réel saisi le ' + fmtShort(S.acctDate) + '. ' : 'Solde de départ calculé automatiquement ; touchez « Mettre à jour » pour le recaler sur votre solde bancaire. ') + 'Hypothèses : dépenses courantes à ' + eur(b.pace) + ' par jour, charges fixes à leur date, revenus saisis avec une date à venir' + (S.savingsDay ? ', virement d\'épargne le ' + S.savingsDay + '.' : '.') + (!S.savingsDay && (S.savings > 0 || PROV.length) ? ' Indiquez le jour de votre virement d\'épargne dans Réglages pour l\'inclure.' : '') + '</p></section>';
+    '<div class="kpis"><div class="kpi"><div class="l">Aujourd\'hui (estimé)</div><div class="v num">' + eur(b.now) + '</div></div><div class="kpi"><div class="l">Point bas · ' + fmtShort(b.min.d) + '</div><div class="v num" style="color:var(--' + (b.low ? 'bad' : 'ink') + ')">' + eur(b.min.bal) + '</div></div></div>' +
+    balanceChart(b) +
+    '<p class="small muted">Solde saisi le ' + fmtShort(S.acctDate) + ' Hypothèses : dépenses courantes à ' + eur(b.pace) + ' par jour, charges fixes à leur date, revenus saisis avec une date à venir' + (S.savingsDay ? ', virement d\'épargne le ' + S.savingsDay + '.' : '.') + (!S.savingsDay && (S.savings > 0 || PROV.length) ? ' Indiquez le jour de votre virement d\'épargne dans Réglages pour l\'inclure.' : '') + '</p></section>';
 }
 function adviceCard() {
   const a = adviceList(); if (!a.length) return '';
@@ -646,8 +606,8 @@ function onboarding() {
 /* --- Mois --- */
 function niceMax(v) { const e = Math.pow(10, Math.floor(Math.log10(v))), m = v / e; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * e; }
 function weeksChart() {
-  const n = 8, rows = []; let w = curWeek();
-  for (let i = 0; i < n; i++) { rows.unshift({ w, s: weekSpent(w), b: weekBase(w) }); w = prevSeg(w); }
+  const cw = curWeek(), n = 8, rows = [];
+  for (let i = n - 1; i >= 0; i--) { const w = addDays(cw, -7 * i); rows.push({ w, s: weekSpent(w), b: weekBase(w) }); }
   const max = niceMax(Math.max(...rows.map((r) => r.b), ...rows.map((r) => r.s), 1000) * 1.05);
   const W = 340, H = 180, L = 44, R = 8, T = 10, B = 26, iw = W - L - R, ih = H - T - B, bw = iw / n;
   const y = (v) => T + ih - (v / max) * ih;
@@ -904,7 +864,7 @@ function viewSettings() {
     '<section class="card stack"><h2>Budget hebdomadaire</h2>' +
     '<label class="f">Calcul<select data-set="mode"><option value="auto"' + (S.mode === 'auto' ? ' selected' : '') + '>Automatique (revenus − charges − épargne)</option><option value="manual"' + (S.mode === 'manual' ? ' selected' : '') + '>Je fixe le montant</option></select></label>' +
     (S.mode === 'manual' ? '<label class="f">Budget par semaine<input data-money="manual" inputmode="decimal" value="' + (S.manual ? toInput(S.manual) : '') + '" placeholder="0"></label>' : '') +
-    '<div class="small muted num">Budget actuel : <strong style="color:var(--ink)">' + eur(envCap()) + '</strong> par semaine complète</div>' +
+    '<div class="small muted num">Budget actuel : <strong style="color:var(--ink)">' + eur(weekBase(curWeek())) + '</strong> par semaine</div>' +
     '<label class="f">La semaine commence le<select data-set="weekStart">' + [1, 2, 3, 4, 5, 6, 0].map((d) => '<option value="' + d + '"' + (S.weekStart === d ? ' selected' : '') + '>' + DAYS[d] + '</option>').join('') + '</select></label>' +
     '<label class="f">Le mois commence le<select data-set="monthStart">' + Array.from({ length: 28 }, (_, i) => i + 1).map((d) => '<option value="' + d + '"' + (S.monthStart === d ? ' selected' : '') + '>' + d + '</option>').join('') + '</select></label>' +
     '<label class="sw"><span><strong>Réserver le remboursement de l\'épargne de secours</strong><div class="small muted">Le dépassement d\'un mois est retenu sur le budget du mois suivant.</div></span><input type="checkbox" data-set="refill"' + (S.refill ? ' checked' : '') + '></label>' +
@@ -1100,9 +1060,8 @@ document.addEventListener('submit', async (ev) => {
       if (wantFav && !FAV.some((x) => x.note === doc.note && x.amount === amount && x.cat === doc.cat)) await write(() => store.set('f_' + uid(), { t: 'f', note: doc.note, amount, cat: doc.cat, ts: Date.now() }));
       const cnt = doc.prov ? 0 : amount, c = catById(doc.cat), ca = beforeCat - oldSameCat + cnt, ta = beforeAll - wasInWeek + cnt, inf = weekInfo(w);
       let msg = 'Enregistré';
-      const cbw = c ? catBud(c, w) : 0;
-      if (c && cbw && ca / cbw >= 1) msg = c.name + ' : budget dépassé';
-      else if (c && cbw && ca / cbw >= 0.8) msg = c.name + ' à ' + pct(ca / cbw);
+      if (c && c.budget && ca / c.budget >= 1) msg = c.name + ' : budget dépassé';
+      else if (c && c.budget && ca / c.budget >= 0.8) msg = c.name + ' à ' + pct(ca / c.budget);
       else if (inf.avail > 0 && ta / inf.avail >= 1) msg = 'Budget de la semaine dépassé';
       else if (inf.avail > 0 && ta / inf.avail >= 0.8) msg = 'Budget de la semaine à ' + pct(ta / inf.avail);
       toast(msg, old ? () => store.set(id, old) : () => store.del(id));
@@ -1228,7 +1187,7 @@ document.addEventListener('click', async (ev) => {
       if (el.dataset.armed) { await removePin(); toast('Code désactivé'); render(); } else { el.dataset.armed = '1'; el.textContent = 'Confirmer la désactivation'; }
       break;
     case 'tab': tab = el.dataset.tab; render(); window.scrollTo(0, 0); break;
-    case 'wk': weekSel = +el.dataset.d < 0 ? prevSeg(weekSel) : nextSeg(weekSel); render(); break;
+    case 'wk': weekSel = addDays(weekSel, +el.dataset.d); render(); break;
     case 'wkNow': weekSel = curWeek(); render(); break;
     case 'addExp': expenseSheet(); break;
     case 'editExp': { const sw = el.closest('.swr'); if (sw && sw.classList.contains('open')) { sw.classList.remove('open'); el.style.transform = ''; break; } expenseSheet(DOCS[id]); break; }
